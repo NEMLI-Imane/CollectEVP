@@ -1,0 +1,12 @@
+framework:
+    serializer:
+        default_context:
+            groups: ['Default']
+
+
+
+
+
+
+
+

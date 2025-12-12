@@ -1,0 +1,84 @@
+# --- Dépendances ---
+node_modules/
+backend/vendor/
+composer.lock
+
+# --- Fichiers de build et cache ---
+dist/
+build/
+backend/var/cache/
+backend/var/log/
+*.log
+
+# --- Fichiers d'environnement et secrets ---
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+backend/.env.*.local
+
+# --- Clés JWT (sécurité) ---
+backend/config/jwt/private.pem
+backend/config/jwt/public.pem
+backend/config/jwt/*.pem
+
+# --- Fichiers système ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- IDE et éditeurs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# --- Fichiers temporaires ---
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# --- Fichiers de test et couverture ---
+coverage/
+.nyc_output/
+*.coverage
+
+# --- Fichiers OS spécifiques ---
+# Windows
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+
+# Linux
+*~
+.directory
+
+# --- Base de données (optionnel - décommenter si vous voulez ignorer la BDD) ---
+# backend/var/data.db
+# backend/var/*.db
+
+# --- MAIS ON GARDE LA BASE DE DONNÉES (Pour votre cas précis) ---
+# Normalement on ignore *.db, mais ici on veut la partager :
+!backend/var/data.db
+
+# --- Fichiers de lock (optionnel - certains projets les gardent) ---
+# package-lock.json
+# yarn.lock

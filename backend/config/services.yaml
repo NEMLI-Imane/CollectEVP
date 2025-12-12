@@ -1,0 +1,35 @@
+parameters:
+
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+
+    App\:
+        resource: '../src/'
+        exclude:
+            - '../src/DependencyInjection/'
+            - '../src/Entity/'
+            - '../src/Kernel.php'
+
+    App\Controller\:
+        resource: '../src/Controller/'
+        tags: ['controller.service_arguments']
+
+    App\Security\JWTAuthenticationSuccessHandler:
+        arguments:
+            $jwtManager: '@lexik_jwt_authentication.jwt_manager'
+
+    App\EventListener\CORSPreflightListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.request, priority: 100 }
+
+    App\EventListener\CORSListener:
+        tags:
+            - { name: kernel.event_listener, event: kernel.response }
+
+
+
+
+
+
