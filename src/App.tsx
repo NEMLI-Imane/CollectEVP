@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage';
 import GestionnaireHomePage from './components/GestionnaireHomePage';
 import ResponsableServicePage from './components/ResponsableServicePage';
@@ -8,7 +8,7 @@ import AdminPage from './components/AdminPage';
 import { Toaster } from './components/ui/sonner';
 import { Button } from './components/ui/button';
 import { login, logout as apiLogout, getCurrentUser, getToken } from './services/api';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 
 export type UserRole = 'Gestionnaire' | 'Responsable Service' | 'Responsable Division' | 'RH' | 'Administrateur';
 
@@ -18,6 +18,26 @@ export interface User {
   role: UserRole;
   division?: string;
 }
+
+// Fonction pour normaliser le rôle (définie en dehors du composant pour éviter les problèmes de dépendances)
+const normalizeRole = (role: string | undefined): UserRole => {
+  if (!role) return 'Gestionnaire'; // Valeur par défaut
+  
+  const cleanedRole = role.trim();
+  const roleMap: Record<string, UserRole> = {
+    'Gestionnaire': 'Gestionnaire',
+    'Responsable Service': 'Responsable Service',
+    'Responsable Division': 'Responsable Division',
+    'RH': 'RH',
+    'Administrateur': 'Administrateur',
+    'admin': 'Administrateur',
+    'Admin': 'Administrateur',
+    'ADMIN': 'Administrateur',
+    'administrateur': 'Administrateur',
+  };
+  
+  return roleMap[cleanedRole] || cleanedRole as UserRole;
+};
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -34,7 +54,7 @@ export default function App() {
           setCurrentUser({
             name: user.name,
             email: user.email,
-            role: user.role as UserRole,
+            role: normalizeRole(user.role),
             division: user.division,
           });
           setIsAuthenticated(true);
@@ -61,24 +81,10 @@ export default function App() {
         throw new Error('Réponse invalide: données utilisateur manquantes');
       }
       
-      // Normaliser le rôle pour correspondre aux types attendus
-      let normalizedRole = response.user.role;
-      if (typeof normalizedRole === 'string') {
-        // S'assurer que le rôle correspond exactement aux valeurs attendues
-        const roleMap: Record<string, UserRole> = {
-          'Gestionnaire': 'Gestionnaire',
-          'Responsable Service': 'Responsable Service',
-          'Responsable Division': 'Responsable Division',
-          'RH': 'RH',
-          'Administrateur': 'Administrateur',
-        };
-        normalizedRole = roleMap[normalizedRole] || normalizedRole as UserRole;
-      }
-      
       const userData: User = {
         name: response.user.name || 'Utilisateur',
         email: response.user.email,
-        role: normalizedRole as UserRole,
+        role: normalizeRole(response.user.role),
         division: response.user.division,
       };
       
@@ -145,26 +151,47 @@ export default function App() {
       );
     }
     
-    const roleString = String(currentUser.role);
+    const roleString = String(currentUser.role).trim();
     console.log('🔍 Rôle en string:', roleString);
     
-    switch (roleString) {
-      case 'Gestionnaire':
+    // Normaliser le rôle pour le switch (gérer les variations)
+    const normalizedRoleForSwitch = roleString.toLowerCase();
+    
+    switch (normalizedRoleForSwitch) {
+      case 'gestionnaire':
         console.log('Affichage de la page Gestionnaire');
         return <GestionnaireHomePage user={currentUser} onLogout={handleLogout} />;
-      case 'Responsable Service':
+      case 'responsable service':
         console.log('Affichage de la page Responsable Service');
         return <ResponsableServicePage user={currentUser} onLogout={handleLogout} />;
-      case 'Responsable Division':
+      case 'responsable division':
         console.log('Affichage de la page Responsable Division');
         return <ResponsableDivisionPage user={currentUser} onLogout={handleLogout} />;
-      case 'RH':
+      case 'rh':
         console.log('Affichage de la page RH');
         return <RHPage user={currentUser} onLogout={handleLogout} />;
-      case 'Administrateur':
+      case 'administrateur':
+      case 'admin':
         console.log('Affichage de la page Administrateur');
         return <AdminPage user={currentUser} onLogout={handleLogout} />;
       default:
+        // Essayer aussi avec la valeur exacte (sans normalisation)
+        if (roleString === 'Gestionnaire') {
+          return <GestionnaireHomePage user={currentUser} onLogout={handleLogout} />;
+        }
+        if (roleString === 'Responsable Service') {
+          return <ResponsableServicePage user={currentUser} onLogout={handleLogout} />;
+        }
+        if (roleString === 'Responsable Division') {
+          return <ResponsableDivisionPage user={currentUser} onLogout={handleLogout} />;
+        }
+        if (roleString === 'RH') {
+          return <RHPage user={currentUser} onLogout={handleLogout} />;
+        }
+        if (roleString === 'Administrateur') {
+          return <AdminPage user={currentUser} onLogout={handleLogout} />;
+        }
+        
         console.error('❌ Rôle non reconnu:', currentUser.role);
         console.error('❌ Type:', typeof currentUser.role);
         console.error('❌ Valeur brute:', JSON.stringify(currentUser.role));

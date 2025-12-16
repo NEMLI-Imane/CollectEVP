@@ -50,17 +50,38 @@ export const apiRequest = async (
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers,
+      credentials: 'include', // Important pour CORS avec credentials
+    });
 
-  if (!response.ok) {
-    const error: ApiError = await response.json().catch(() => ({}));
-    throw new Error(error.error || error.message || 'Une erreur est survenue');
+    if (!response.ok) {
+      let errorMessage = 'Une erreur est survenue';
+      try {
+        const error: ApiError = await response.json();
+        errorMessage = error.error || error.message || error.detail || `Erreur ${response.status}: ${response.statusText}`;
+        console.error('❌ Erreur API:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: error
+        });
+      } catch (e) {
+        errorMessage = `Erreur ${response.status}: ${response.statusText}`;
+        console.error('❌ Erreur API (pas de JSON):', response.status, response.statusText);
+      }
+      throw new Error(errorMessage);
+    }
+
+    return response;
+  } catch (error) {
+    // Gérer les erreurs réseau (CORS, timeout, etc.)
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      throw new Error('Impossible de se connecter au serveur. Vérifiez que le backend est démarré sur http://127.0.0.1:8080');
+    }
+    throw error;
   }
-
-  return response;
 };
 
 // Fonction de connexion - Authentification réelle via le backend
@@ -83,6 +104,7 @@ export const login = async (email: string, password: string): Promise<LoginRespo
       },
       body: JSON.stringify({ email, password }),
       signal: controller.signal, // Ajouter le signal pour le timeout
+      credentials: 'include', // Important pour CORS
     });
 
     if (timeoutId) {
@@ -293,5 +315,308 @@ export const deleteEmployee = async (id: number): Promise<void> => {
   await apiRequest(`/employees/${id}`, {
     method: 'DELETE',
   });
+};
+
+// Interface pour une entité Prime
+export interface Prime {
+  id?: number;
+  tauxMonetaire?: string | number;
+  groupe?: number;
+  nombrePostes?: number;
+  scoreEquipe?: number;
+  noteHierarchique?: number;
+  scoreCollectif?: number;
+  montantCalcule?: string | number;
+  statut?: string;
+  submittedAt?: string;
+  commentaire?: string;
+}
+
+// Interface pour une entité Conge
+export interface Conge {
+  id?: number;
+  dateDebut?: string;
+  dateFin?: string;
+  nombreJours?: number;
+  tranche?: number;
+  avanceSurConge?: boolean;
+  montantAvance?: string | number;
+  indemniteForfaitaire?: string | number;
+  indemniteCalculee?: string | number;
+  statut?: string;
+  submittedAt?: string;
+  commentaire?: string;
+}
+
+// Interface pour une soumission EVP
+export interface EVPSubmission {
+  id: number;
+  employee: Employee;
+  submittedBy?: {
+    id: number;
+    email: string;
+    name: string;
+    role: string;
+  };
+  isPrime: boolean; // New boolean field
+  isConge: boolean; // New boolean field
+  prime?: Prime; // Relation to Prime entity
+  conge?: Conge; // Relation to Conge entity
+  montantCalcule?: string | number;
+  indemniteCalculee?: string | number;
+  valideService?: boolean;
+  valideDivision?: boolean;
+  // Champs dépréciés (pour compatibilité avec l'ancien format)
+  type?: string;
+  tauxMonetaire?: string | number;
+  groupe?: number;
+  nombrePostes?: number;
+  scoreEquipe?: number;
+  noteHierarchique?: number;
+  scoreCollectif?: number;
+  dateDebut?: string;
+  dateFin?: string;
+  nombreJours?: number;
+  tranche?: number;
+  avanceSurConge?: boolean;
+  montantAvance?: string | number;
+  indemniteForfaitaire?: string | number;
+}
+
+// Fonction pour obtenir les soumissions EVP
+export const getEVPSubmissions = async (): Promise<EVPSubmission[]> => {
+  try {
+    console.log('📤 Récupération des soumissions EVP...');
+    const response = await apiRequest('/evp/submissions');
+    const data = await response.json();
+    console.log('✅ Soumissions EVP reçues:', data);
+    
+    if (Array.isArray(data)) {
+      return data;
+    }
+    
+    // Si ce n'est pas un tableau, logger et retourner un tableau vide
+    console.warn('⚠️ La réponse n\'est pas un tableau:', data);
+    return [];
+  } catch (error) {
+    console.error('❌ Erreur lors de la récupération des soumissions EVP:', error);
+    // Retourner un tableau vide au lieu de lever une erreur pour permettre la continuation
+    return [];
+  }
+};
+
+// Fonction pour créer une soumission EVP (ajouter un employé au tableau)
+export const createEVPSubmission = async (employeeId: number, type: 'Prime' | 'Congé' | 'En attente' = 'En attente'): Promise<EVPSubmission> => {
+  console.log('📤 Création d\'une soumission EVP:', { employeeId, type });
+  
+  try {
+    const response = await apiRequest('/evp/submissions', {
+      method: 'POST',
+      body: JSON.stringify({
+        employeeId,
+        type, // 'Prime' ou 'Congé' pour créer immédiatement l'entité correspondante
+      }),
+    });
+    
+    const data = await response.json();
+    console.log('✅ Soumission EVP créée avec succès:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Erreur lors de la création de la soumission EVP:', error);
+    throw error;
+  }
+};
+
+// Fonction pour mettre à jour une soumission EVP (sauvegarder Prime/Congé)
+export const updateEVPSubmission = async (submissionId: number, data: Partial<EVPSubmission>): Promise<EVPSubmission> => {
+  console.log('📤 Mise à jour de la soumission EVP:', { submissionId, data });
+
+  try {
+    const response = await apiRequest(`/evp/submissions/${submissionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+
+    const updatedData = await response.json();
+    console.log('✅ Soumission EVP mise à jour avec succès:', updatedData);
+    return updatedData;
+  } catch (error) {
+    console.error('❌ Erreur lors de la mise à jour de la soumission EVP:', error);
+    throw error;
+  }
+};
+
+export const deleteEVPSubmission = async (submissionId: number, type: 'Prime' | 'Congé'): Promise<void> => {
+  console.log('📤 Suppression d\'une soumission EVP:', { submissionId, type });
+
+  try {
+    const response = await apiRequest(`/evp/submissions/${submissionId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ type }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la suppression');
+    }
+
+    console.log('✅ Soumission EVP supprimée avec succès');
+  } catch (error) {
+    console.error('❌ Erreur lors de la suppression de la soumission EVP:', error);
+    throw error;
+  }
+};
+
+// Employee Request interfaces
+export interface EmployeeRequest {
+  id: number;
+  matricule: string;
+  nom: string;
+  prenom: string;
+  raison: string;
+  requestedBy: {
+    id: number;
+    name: string;
+    email: string;
+  };
+  requestDate: string;
+  processedBy?: {
+    id: number;
+    name: string;
+    email: string;
+  } | null;
+  processedDate?: string | null;
+  statut: 'En attente' | 'Traité' | 'Rejeté';
+}
+
+// Create employee request
+export const createEmployeeRequest = async (data: {
+  matricule: string;
+  nom: string;
+  prenom: string;
+  raison: string;
+}): Promise<EmployeeRequest> => {
+  console.log('📤 Création d\'une demande d\'employé:', data);
+
+  try {
+    const response = await apiRequest('/employee-requests', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la création de la demande');
+    }
+
+    const result = await response.json();
+    console.log('✅ Demande d\'employé créée avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la création de la demande d\'employé:', error);
+    throw error;
+  }
+};
+
+// Get all employee requests (for RH)
+export const getEmployeeRequests = async (): Promise<EmployeeRequest[]> => {
+  console.log('📤 Récupération des demandes d\'employé...');
+
+  try {
+    const response = await apiRequest('/employee-requests', {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la récupération des demandes');
+    }
+
+    const result = await response.json();
+    console.log('✅ Demandes d\'employé récupérées avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la récupération des demandes d\'employé:', error);
+    throw error;
+  }
+};
+
+// Process employee request (approve or reject)
+export const processEmployeeRequest = async (
+  requestId: number,
+  action: 'approve' | 'reject',
+  additionalData?: {
+    poste: string;
+    service: string;
+    division: string;
+  }
+): Promise<any> => {
+  console.log('📤 Traitement d\'une demande d\'employé:', { requestId, action, additionalData });
+
+  try {
+    const body: any = { action };
+    if (action === 'approve' && additionalData) {
+      body.poste = additionalData.poste;
+      body.service = additionalData.service;
+      body.division = additionalData.division;
+    }
+
+    const response = await apiRequest(`/employee-requests/${requestId}/process`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors du traitement de la demande');
+    }
+
+    const result = await response.json();
+    console.log('✅ Demande d\'employé traitée avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors du traitement de la demande d\'employé:', error);
+    throw error;
+  }
+};
+
+// Validate or reject EVP submission (for Responsable Service or Division)
+export const validateEVPSubmission = async (
+  submissionId: number,
+  action: 'approve' | 'reject',
+  data?: {
+    niveau: 'service' | 'division';
+    commentaire?: string;
+    type?: 'Prime' | 'Congé';
+  }
+): Promise<any> => {
+  console.log('📤 Validation/Rejet d\'une soumission EVP:', { submissionId, action, data });
+
+  try {
+    const body: any = { action, niveau: data?.niveau || 'service' };
+    if (data?.commentaire) {
+      body.commentaire = data.commentaire;
+    }
+    if (data?.type) {
+      body.type = data.type;
+    }
+
+    const response = await apiRequest(`/evp/submissions/${submissionId}/validate`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la validation');
+    }
+
+    const result = await response.json();
+    console.log('✅ Soumission EVP validée/rejetée avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la validation de la soumission EVP:', error);
+    throw error;
+  }
 };
 

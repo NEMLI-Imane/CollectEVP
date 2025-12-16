@@ -11,6 +11,11 @@ class CORSListener
         $response = $event->getResponse();
         $request = $event->getRequest();
 
+        // Ne pas modifier les réponses OPTIONS déjà gérées par CORSPreflightListener
+        if ($request->getMethod() === 'OPTIONS') {
+            return;
+        }
+
         // Autoriser les requêtes depuis localhost:3000 (frontend React)
         $origin = $request->headers->get('Origin');
         $allowedOrigins = [
@@ -22,17 +27,14 @@ class CORSListener
 
         if (in_array($origin, $allowedOrigins, true)) {
             $response->headers->set('Access-Control-Allow-Origin', $origin);
+        } else {
+            // En développement, autoriser toutes les origines si nécessaire
+            $response->headers->set('Access-Control-Allow-Origin', '*');
         }
 
         $response->headers->set('Access-Control-Allow-Credentials', 'true');
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-
-        // Gérer les requêtes OPTIONS (preflight)
-        if ($request->getMethod() === 'OPTIONS') {
-            $response->setStatusCode(200);
-            $response->setContent('');
-        }
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
     }
 }
 

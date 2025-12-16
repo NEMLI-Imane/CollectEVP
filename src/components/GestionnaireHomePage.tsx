@@ -1,15 +1,14 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User } from '../App';
-import { getEmployees, Employee } from '../services/api';
+import { getEmployees, Employee, getEVPSubmissions, createEVPSubmission, updateEVPSubmission, deleteEVPSubmission, EVPSubmission, createEmployeeRequest } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
-import { Calendar } from './ui/calendar';
 import { Switch } from './ui/switch';
-import { FileEdit, LogOut, Clock, CheckCircle2, Menu, Plus, CalendarDays, Send, Award, MessageSquare, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
+import { FileEdit, LogOut, Clock, CheckCircle2, Menu, Plus, CalendarDays, Send, Award, MessageSquare, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -25,13 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from './ui/popover';
-import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
 
 interface GestionnaireHomePageProps {
   user: User;
@@ -46,6 +38,9 @@ interface PrimeData {
   noteHierarchique: string;
   scoreCollectif: string;
   montantCalcule: number;
+  statut?: string;
+  submittedAt?: string;
+  commentaire?: string;
 }
 
 interface CongeData {
@@ -57,6 +52,9 @@ interface CongeData {
   montantAvance: string;
   indemniteForfaitaire: string;
   indemniteCalculee: number;
+  statut?: string;
+  submittedAt?: string;
+  commentaire?: string;
 }
 
 interface EmployeeEVP {
@@ -79,19 +77,22 @@ interface MasterEmployee {
 export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHomePageProps) {
   const [currentPage, setCurrentPage] = useState<'saisie' | 'historique'>('saisie');
   const [saisieTab, setSaisieTab] = useState<'prime' | 'conge'>('prime');
-  const [submittedCount, setSubmittedCount] = useState(0);
-  const [employees, setEmployees] = useState<EmployeeEVP[]>([
-    { id: 1, matricule: '45872', nom: 'Ahmed Bennani', poste: 'technicien', primeData: null, congeData: null, isSubmitted: false },
-    { id: 2, matricule: '45873', nom: 'Fatima Zahra Alami', poste: 'cadre administratif', primeData: null, congeData: null, isSubmitted: false },
-    { id: 3, matricule: '45874', nom: 'Mohammed Tazi', poste: 'agent de maîtrise', primeData: null, congeData: null, isSubmitted: false },
-    { id: 4, matricule: '45875', nom: 'Salma Benjelloun', poste: 'technicien', primeData: null, congeData: null, isSubmitted: false },
-  ]);
+  const [employees, setEmployees] = useState<EmployeeEVP[]>([]);
+  const [allSubmissions, setAllSubmissions] = useState<EVPSubmission[]>([]); // Toutes les soumissions pour calculer les compteurs
+  const [historicalSubmissions, setHistoricalSubmissions] = useState<EVPSubmission[]>([]); // Soumissions soumises pour l'historique
+  const [searchTerm, setSearchTerm] = useState(''); // Terme de recherche pour l'historique
+  const [loadingSubmissions, setLoadingSubmissions] = useState(true); // Commencer en état de chargement
+  const [loadingHistory, setLoadingHistory] = useState(false); // Chargement de l'historique
 
   // Dialog states
   const [primeDialogOpen, setPrimeDialogOpen] = useState(false);
   const [congeDialogOpen, setCongeDialogOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeEVP | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  
+  // Date input states (format JJ/MM/AAAA)
+  const [dateDebutText, setDateDebutText] = useState('');
+  const [dateFinText, setDateFinText] = useState('');
 
   // Prime form state
   const [primeForm, setPrimeForm] = useState<PrimeData>({
@@ -120,15 +121,32 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
   const [masterEmployees, setMasterEmployees] = useState<MasterEmployee[]>([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
 
-  // Charger les employés depuis l'API au chargement
+  // Charger les employés et soumissions depuis l'API au chargement
   useEffect(() => {
     loadMasterEmployees();
+    // Ne pas charger les soumissions ici, attendre que saisieTab soit défini
   }, []);
 
-  // Recharger les employés quand on accède à la page de saisie
+  // Charger les soumissions quand on change d'onglet (Prime/Congé) ou au montage initial
+  useEffect(() => {
+    // S'assurer que saisieTab est défini avant de charger
+    if (saisieTab) {
+      loadEVPSubmissions(saisieTab);
+    }
+  }, [saisieTab]);
+
+  // Charger l'historique quand on accède à la page historique
+  useEffect(() => {
+    if (currentPage === 'historique') {
+      loadHistoricalSubmissions();
+    }
+  }, [currentPage]);
+
+  // Recharger les employés et soumissions quand on accède à la page de saisie
   useEffect(() => {
     if (currentPage === 'saisie') {
       loadMasterEmployees();
+      loadEVPSubmissions(saisieTab);
       syncEmployeesWithDatabase();
     }
   }, [currentPage]);
@@ -141,8 +159,8 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       const masterEmps: MasterEmployee[] = employees.map(emp => ({
         id: emp.id,
         matricule: emp.matricule,
-        nom: `${emp.prenom} ${emp.nom}`,
-        poste: emp.poste,
+        nom: emp.prenom ? `${emp.prenom} ${emp.nom}` : emp.nom,
+        poste: emp.poste || '',
       }));
       setMasterEmployees(masterEmps);
     } catch (error) {
@@ -150,6 +168,129 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       toast.error('Erreur lors du chargement des employés');
     } finally {
       setLoadingEmployees(false);
+    }
+  };
+
+  // Fonction pour charger les soumissions EVP depuis la base de données
+  const loadEVPSubmissions = async (tab?: 'prime' | 'conge') => {
+    try {
+      setLoadingSubmissions(true);
+      // Utiliser le paramètre tab ou l'état actuel de saisieTab
+      const currentTab = tab || saisieTab;
+      console.log(`🔄 Chargement des soumissions EVP pour l'onglet: ${currentTab}...`);
+      const submissions = await getEVPSubmissions();
+      console.log('📋 Soumissions reçues:', submissions);
+      
+      // Stocker toutes les soumissions pour calculer les compteurs
+      setAllSubmissions(submissions);
+      
+      // Filtrer uniquement les soumissions en attente (non soumises)
+      // Le statut est maintenant dans Prime/Conge, pas dans EVPSubmission
+      const pendingSubmissions = submissions.filter(
+        (sub: EVPSubmission) => {
+          if (currentTab === 'prime' && sub.isPrime && sub.prime) {
+            const statut = sub.prime.statut || '';
+            return !statut || statut === 'En attente' || statut === null;
+          } else if (currentTab === 'conge' && sub.isConge && sub.conge) {
+            const statut = sub.conge.statut || '';
+            return !statut || statut === 'En attente' || statut === null;
+          }
+          return false;
+        }
+      );
+      
+      console.log('📋 Soumissions en attente:', pendingSubmissions);
+      
+      // Convertir les soumissions en format EmployeeEVP
+      // Filtrer selon l'onglet actif : Prime ou Congé
+      const evpEmployees: EmployeeEVP[] = pendingSubmissions
+        .filter((submission: EVPSubmission) => {
+          if (!submission.employee) return false;
+          // Filtrer selon l'onglet actif (utiliser currentTab au lieu de saisieTab)
+          if (currentTab === 'prime') {
+            return submission.isPrime; // Afficher uniquement les soumissions avec Prime
+          } else {
+            return submission.isConge; // Afficher uniquement les soumissions avec Congé
+          }
+        })
+        .map((submission: EVPSubmission) => {
+          const emp = submission.employee;
+          if (!emp) {
+            console.warn('⚠️ Soumission sans employé:', submission);
+            return null;
+          }
+          
+          const nomComplet = emp.prenom ? `${emp.prenom} ${emp.nom}` : emp.nom;
+          
+          // Extraire les données Prime depuis l'entité Prime
+          const primeData = submission.prime && submission.isPrime
+            ? {
+                tauxMonetaire: submission.prime.tauxMonetaire?.toString() || '',
+                groupe: submission.prime.groupe?.toString() || '1',
+                nombrePostes: submission.prime.nombrePostes?.toString() || '',
+                scoreEquipe: submission.prime.scoreEquipe?.toString() || '',
+                noteHierarchique: submission.prime.noteHierarchique?.toString() || '',
+                scoreCollectif: submission.prime.scoreCollectif?.toString() || '',
+                montantCalcule: typeof submission.prime.montantCalcule === 'string' ? parseFloat(submission.prime.montantCalcule) || 0 : (submission.prime.montantCalcule || 0),
+                statut: submission.prime.statut || 'En attente',
+              }
+            : null;
+          
+          // Extraire les données Congé depuis l'entité Conge
+          const congeData = submission.conge && submission.isConge
+            ? {
+                dateDebut: submission.conge.dateDebut ? new Date(submission.conge.dateDebut) : undefined,
+                dateFin: submission.conge.dateFin ? new Date(submission.conge.dateFin) : undefined,
+                nombreJours: submission.conge.nombreJours || 0,
+                tranche: submission.conge.tranche?.toString() || '1',
+                avanceSurConge: submission.conge.avanceSurConge || false,
+                montantAvance: submission.conge.montantAvance?.toString() || '',
+                indemniteForfaitaire: submission.conge.indemniteForfaitaire?.toString() || '',
+                indemniteCalculee: typeof submission.conge.indemniteCalculee === 'string' ? parseFloat(submission.conge.indemniteCalculee) || 0 : (submission.conge.indemniteCalculee || 0),
+                statut: submission.conge.statut || 'En attente',
+              }
+            : null;
+          
+          // Déterminer isSubmitted selon le type (Prime ou Congé)
+          // Une soumission est considérée comme soumise si elle est "Soumis", "Validé Service", "Validé Division", ou "Validé"
+          // MAIS si elle est "Rejeté", elle n'est PAS considérée comme soumise (elle réapparaît dans le tableau de saisie)
+          let isSubmitted = currentTab === 'prime' 
+            ? (primeData?.statut === 'Soumis' || primeData?.statut === 'Validé Service' || primeData?.statut === 'Validé Division' || primeData?.statut === 'Validé' || false)
+            : (congeData?.statut === 'Soumis' || congeData?.statut === 'Validé Service' || congeData?.statut === 'Validé Division' || congeData?.statut === 'Validé' || false);
+          
+          // Si rejeté, ne pas considérer comme soumis (pour qu'il réapparaisse dans le tableau de saisie)
+          if (currentTab === 'prime' && primeData?.statut === 'Rejeté') {
+            isSubmitted = false;
+          }
+          if (currentTab === 'conge' && congeData?.statut === 'Rejeté') {
+            isSubmitted = false;
+          }
+          
+          return {
+            id: submission.id,
+            matricule: emp.matricule,
+            nom: nomComplet,
+            poste: emp.poste || '',
+            primeData,
+            congeData,
+            isSubmitted,
+          };
+        })
+        .filter((emp): emp is EmployeeEVP => emp !== null); // Filtrer les null
+      
+      console.log('✅ Employés EVP convertis:', evpEmployees);
+      console.log('📊 Nombre d\'employés dans le tableau:', evpEmployees.length);
+      setEmployees(evpEmployees);
+      
+      // Forcer un re-render si nécessaire
+      if (evpEmployees.length > 0) {
+        console.log('✅ Tableau mis à jour avec', evpEmployees.length, 'employé(s)');
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des soumissions EVP:', error);
+      toast.error('Erreur lors du chargement des soumissions: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingSubmissions(false);
     }
   };
 
@@ -198,6 +339,12 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
   // New employee form (for EVP saisie - select from dropdown)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
   const [showRequestDialog, setShowRequestDialog] = useState(false);
+  const [requestForm, setRequestForm] = useState({
+    matricule: '',
+    nom: '',
+    prenom: '',
+    raison: '',
+  });
 
   const getInitials = (name: string) => {
     return name
@@ -208,7 +355,99 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       .slice(0, 2);
   };
 
-  const pendingCount = employees.filter(e => e.primeData || e.congeData).length;
+  // Calculer les compteurs réels depuis toutes les soumissions chargées
+  const submittedCount = allSubmissions.filter(sub => {
+    if (saisieTab === 'prime' && sub.isPrime && sub.prime) {
+      const statut = sub.prime.statut || '';
+      return statut === 'Soumis' || statut === 'Validé' || statut === 'Validé Service' || statut === 'Validé Division';
+    } else if (saisieTab === 'conge' && sub.isConge && sub.conge) {
+      const statut = sub.conge.statut || '';
+      return statut === 'Soumis' || statut === 'Validé' || statut === 'Validé Service' || statut === 'Validé Division';
+    }
+    return false;
+  }).length;
+
+  const pendingCount = allSubmissions.filter(sub => {
+    if (saisieTab === 'prime' && sub.isPrime && sub.prime) {
+      const statut = sub.prime.statut || '';
+      return !statut || statut === 'En attente' || statut === null;
+    } else if (saisieTab === 'conge' && sub.isConge && sub.conge) {
+      const statut = sub.conge.statut || '';
+      return !statut || statut === 'En attente' || statut === null;
+    }
+    return false;
+  }).length;
+
+  // Fonction pour charger les soumissions historiques (soumises, validées, rejetées)
+  const loadHistoricalSubmissions = async () => {
+    try {
+      setLoadingHistory(true);
+      console.log('🔄 Chargement de l\'historique des soumissions...');
+      const submissions = await getEVPSubmissions();
+      console.log('📋 Toutes les soumissions reçues:', submissions);
+      
+      // Filtrer uniquement les soumissions soumises (pas "En attente")
+      const historical = submissions.filter((sub: EVPSubmission) => {
+        // Si Prime, vérifier le statut dans Prime
+        if (sub.isPrime && sub.prime) {
+          const statut = sub.prime.statut || '';
+          return statut !== 'En attente' && statut !== null && statut !== '';
+        }
+        // Si Congé, vérifier le statut dans Conge
+        if (sub.isConge && sub.conge) {
+          const statut = sub.conge.statut || '';
+          return statut !== 'En attente' && statut !== null && statut !== '';
+        }
+        return false;
+      });
+      
+      console.log('📋 Soumissions historiques:', historical);
+      setHistoricalSubmissions(historical);
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement de l\'historique:', error);
+      toast.error('Erreur lors du chargement de l\'historique: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // Filtrer l'historique selon le terme de recherche
+  const filteredHistoricalSubmissions = historicalSubmissions.filter((sub: EVPSubmission) => {
+    if (!searchTerm.trim()) return true;
+    
+    const searchLower = searchTerm.toLowerCase();
+    const emp = sub.employee;
+    if (!emp) return false;
+    
+    const matricule = emp.matricule?.toLowerCase() || '';
+    const nom = emp.nom?.toLowerCase() || '';
+    const prenom = emp.prenom?.toLowerCase() || '';
+    const poste = emp.poste?.toLowerCase() || '';
+    const nomComplet = `${prenom} ${nom}`.toLowerCase();
+    
+    return matricule.includes(searchLower) || 
+           nom.includes(searchLower) || 
+           prenom.includes(searchLower) ||
+           nomComplet.includes(searchLower) ||
+           poste.includes(searchLower);
+  });
+
+  // Calculer les employés disponibles pour la liste déroulante
+  // Filtrer les employés qui sont déjà dans les soumissions (non soumises)
+  // Filtrer les employés disponibles selon l'onglet actif
+  const availableEmployees = masterEmployees.filter(emp => {
+    // Vérifier si l'employé est déjà dans le tableau avec le type correspondant
+    const alreadyInTable = employees.some(e => {
+      if (e.matricule !== emp.matricule || e.isSubmitted) return false;
+      // Pour l'onglet Prime, vérifier si l'employé a déjà une Prime
+      if (saisieTab === 'prime') {
+        return e.primeData !== null;
+      }
+      // Pour l'onglet Congé, vérifier si l'employé a déjà un Congé
+      return e.congeData !== null;
+    });
+    return !alreadyInTable;
+  });
 
   // Prime Dialog Handlers
   const openPrimeDialog = (employee: EmployeeEVP) => {
@@ -243,7 +482,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
     toast.success('Montant calculé avec succès');
   };
 
-  const savePrimeData = () => {
+  const savePrimeData = async () => {
     if (!selectedEmployee) return;
 
     if (!primeForm.tauxMonetaire || !primeForm.nombrePostes) {
@@ -251,14 +490,47 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       return;
     }
 
-    setEmployees(employees.map(emp =>
-      emp.id === selectedEmployee.id
-        ? { ...emp, primeData: { ...primeForm } }
-        : emp
-    ));
+    try {
+      // Sauvegarder dans la base de données
+      const updateData = {
+        type: 'Prime',
+        tauxMonetaire: parseFloat(primeForm.tauxMonetaire) || null,
+        groupe: parseInt(primeForm.groupe) || null,
+        nombrePostes: parseInt(primeForm.nombrePostes) || null,
+        scoreEquipe: parseInt(primeForm.scoreEquipe) || null,
+        noteHierarchique: parseInt(primeForm.noteHierarchique) || null,
+        scoreCollectif: parseInt(primeForm.scoreCollectif) || null,
+      };
 
-    setPrimeDialogOpen(false);
-    toast.success('Prime enregistrée avec succès');
+      const updatedSubmission = await updateEVPSubmission(selectedEmployee.id, updateData);
+      console.log('✅ Prime sauvegardée dans la BDD:', updatedSubmission);
+
+      // Mettre à jour le state local avec les données de la BDD
+      const updatedPrimeData = {
+        tauxMonetaire: updatedSubmission.tauxMonetaire?.toString() || primeForm.tauxMonetaire,
+        groupe: updatedSubmission.groupe?.toString() || primeForm.groupe,
+        nombrePostes: updatedSubmission.nombrePostes?.toString() || primeForm.nombrePostes,
+        scoreEquipe: updatedSubmission.scoreEquipe?.toString() || primeForm.scoreEquipe,
+        noteHierarchique: updatedSubmission.noteHierarchique?.toString() || primeForm.noteHierarchique,
+        scoreCollectif: updatedSubmission.scoreCollectif?.toString() || primeForm.scoreCollectif,
+        montantCalcule: typeof updatedSubmission.montantCalcule === 'string' 
+          ? parseFloat(updatedSubmission.montantCalcule) || 0 
+          : (updatedSubmission.montantCalcule || 0),
+      };
+
+      setEmployees(employees.map(emp =>
+        emp.id === selectedEmployee.id
+          ? { ...emp, primeData: updatedPrimeData }
+          : emp
+      ));
+
+      setPrimeDialogOpen(false);
+      toast.success('Prime enregistrée avec succès');
+    } catch (error) {
+      console.error('❌ Erreur lors de la sauvegarde de la prime:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur: ${errorMessage}`);
+    }
   };
 
   // Congé Dialog Handlers
@@ -266,6 +538,9 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
     setSelectedEmployee(employee);
     if (employee.congeData) {
       setCongeForm(employee.congeData);
+      // Mettre à jour les champs texte avec les dates formatées
+      setDateDebutText(employee.congeData.dateDebut ? formatDate(employee.congeData.dateDebut) : '');
+      setDateFinText(employee.congeData.dateFin ? formatDate(employee.congeData.dateFin) : '');
     } else {
       setCongeForm({
         dateDebut: undefined,
@@ -277,14 +552,103 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
         indemniteForfaitaire: '',
         indemniteCalculee: 0,
       });
+      setDateDebutText('');
+      setDateFinText('');
     }
     setCongeDialogOpen(true);
   };
 
+  // Fonction pour parser une date au format JJ/MM/AAAA
+  const parseDate = (dateStr: string): Date | null => {
+    if (!dateStr || dateStr.length !== 10) return null;
+    const parts = dateStr.split('/');
+    if (parts.length !== 3) return null;
+    const jour = parseInt(parts[0], 10);
+    const mois = parseInt(parts[1], 10) - 1; // Les mois sont 0-indexés en JS
+    const annee = parseInt(parts[2], 10);
+    
+    if (isNaN(jour) || isNaN(mois) || isNaN(annee)) return null;
+    if (jour < 1 || jour > 31 || mois < 0 || mois > 11) return null;
+    
+    const date = new Date(annee, mois, jour);
+    // Vérifier que la date est valide
+    if (date.getDate() !== jour || date.getMonth() !== mois || date.getFullYear() !== annee) {
+      return null;
+    }
+    return date;
+  };
+
+  // Fonction pour formater une date au format JJ/MM/AAAA
+  const formatDate = (date: Date | undefined): string => {
+    if (!date) return '';
+    const jour = date.getDate().toString().padStart(2, '0');
+    const mois = (date.getMonth() + 1).toString().padStart(2, '0');
+    const annee = date.getFullYear();
+    return `${jour}/${mois}/${annee}`;
+  };
+
+  // Fonction pour formater le texte de date (ajouter automatiquement les /)
+  const formatDateInput = (value: string): string => {
+    // Retirer tous les caractères non numériques
+    const numbers = value.replace(/\D/g, '');
+    
+    // Limiter à 8 chiffres (JJMMAAAA)
+    const limited = numbers.slice(0, 8);
+    
+    // Ajouter les séparateurs
+    if (limited.length <= 2) {
+      return limited;
+    } else if (limited.length <= 4) {
+      return `${limited.slice(0, 2)}/${limited.slice(2)}`;
+    } else {
+      return `${limited.slice(0, 2)}/${limited.slice(2, 4)}/${limited.slice(4)}`;
+    }
+  };
+
   const calculateCongeJours = (debut: Date | undefined, fin: Date | undefined) => {
     if (!debut || !fin) return 0;
+    // Calculer la différence en jours (inclusif des deux dates)
     const diff = fin.getTime() - debut.getTime();
-    return Math.ceil(diff / (1000 * 3600 * 24)) + 1;
+    const jours = Math.ceil(diff / (1000 * 3600 * 24)) + 1;
+    return jours > 0 ? jours : 0;
+  };
+
+  // Handler pour la date début
+  const handleDateDebutChange = (value: string) => {
+    const formatted = formatDateInput(value);
+    setDateDebutText(formatted);
+    
+    if (formatted.length === 10) {
+      const date = parseDate(formatted);
+      if (date) {
+        const jours = calculateCongeJours(date, congeForm.dateFin);
+        setCongeForm({ ...congeForm, dateDebut: date, nombreJours: jours });
+      } else {
+        // Date invalide, réinitialiser
+        setCongeForm({ ...congeForm, dateDebut: undefined, nombreJours: 0 });
+      }
+    } else {
+      setCongeForm({ ...congeForm, dateDebut: undefined, nombreJours: 0 });
+    }
+  };
+
+  // Handler pour la date fin
+  const handleDateFinChange = (value: string) => {
+    const formatted = formatDateInput(value);
+    setDateFinText(formatted);
+    
+    if (formatted.length === 10) {
+      const date = parseDate(formatted);
+      if (date) {
+        const jours = calculateCongeJours(congeForm.dateDebut, date);
+        setCongeForm({ ...congeForm, dateFin: date, nombreJours: jours });
+      } else {
+        // Date invalide, réinitialiser
+        setCongeForm({ ...congeForm, dateFin: undefined, nombreJours: 0 });
+      }
+    } else {
+      setCongeForm({ ...congeForm, dateFin: undefined, nombreJours: 0 });
+    }
   };
 
   const calculateConge = () => {
@@ -299,7 +663,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
     toast.success('Indemnité calculée avec succès');
   };
 
-  const saveCongeData = () => {
+  const saveCongeData = async () => {
     if (!selectedEmployee) return;
 
     if (!congeForm.dateDebut || !congeForm.dateFin || !congeForm.indemniteForfaitaire) {
@@ -307,98 +671,472 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       return;
     }
 
-    setEmployees(employees.map(emp =>
-      emp.id === selectedEmployee.id
-        ? { ...emp, congeData: { ...congeForm } }
-        : emp
-    ));
+    try {
+      // Sauvegarder dans la base de données
+      const updateData = {
+        type: 'Congé',
+        dateDebut: congeForm.dateDebut ? congeForm.dateDebut.toISOString().split('T')[0] : null,
+        dateFin: congeForm.dateFin ? congeForm.dateFin.toISOString().split('T')[0] : null,
+        tranche: parseInt(congeForm.tranche) || null,
+        avanceSurConge: congeForm.avanceSurConge || false,
+        montantAvance: congeForm.montantAvance ? parseFloat(congeForm.montantAvance) : null,
+        indemniteForfaitaire: parseFloat(congeForm.indemniteForfaitaire) || null,
+      };
 
-    setCongeDialogOpen(false);
-    toast.success('Congé enregistré avec succès');
+      const updatedSubmission = await updateEVPSubmission(selectedEmployee.id, updateData);
+      console.log('✅ Congé sauvegardé dans la BDD:', updatedSubmission);
+
+      // Mettre à jour le state local avec les données de la BDD
+      const updatedCongeData = {
+        dateDebut: updatedSubmission.dateDebut ? new Date(updatedSubmission.dateDebut) : congeForm.dateDebut,
+        dateFin: updatedSubmission.dateFin ? new Date(updatedSubmission.dateFin) : congeForm.dateFin,
+        nombreJours: updatedSubmission.nombreJours || congeForm.nombreJours || 0,
+        tranche: updatedSubmission.tranche?.toString() || congeForm.tranche,
+        avanceSurConge: updatedSubmission.avanceSurConge || congeForm.avanceSurConge || false,
+        montantAvance: updatedSubmission.montantAvance?.toString() || congeForm.montantAvance,
+        indemniteForfaitaire: updatedSubmission.indemniteForfaitaire?.toString() || congeForm.indemniteForfaitaire,
+        indemniteCalculee: typeof updatedSubmission.indemniteCalculee === 'string' 
+          ? parseFloat(updatedSubmission.indemniteCalculee) || 0 
+          : (updatedSubmission.indemniteCalculee || 0),
+      };
+
+      setEmployees(employees.map(emp =>
+        emp.id === selectedEmployee.id
+          ? { ...emp, congeData: updatedCongeData }
+          : emp
+      ));
+
+      setCongeDialogOpen(false);
+      toast.success('Congé enregistré avec succès');
+    } catch (error) {
+      console.error('❌ Erreur lors de la sauvegarde du congé:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur: ${errorMessage}`);
+    }
   };
 
   // Submit handlers
-  const submitEmployee = (id: number) => {
-    const employee = employees.find(e => e.id === id);
-    if (!employee) return;
+  const submitEmployee = async (id: number) => {
+    try {
+      const employee = employees.find(e => e.id === id);
+      if (!employee) {
+        toast.error('Employé non trouvé');
+        return;
+      }
 
-    if (!employee.primeData && !employee.congeData) {
-      toast.error('Veuillez saisir au moins une prime ou un congé');
-      return;
+      if (!employee.primeData && !employee.congeData) {
+        toast.error('Veuillez saisir au moins une prime ou un congé');
+        return;
+      }
+
+      // Mettre à jour le statut dans la base de données
+      console.log(`📤 Soumission de l'employé ${employee.nom} (ID: ${id})...`);
+      
+      // Mettre à jour le statut de la Prime ou du Congé dans la base de données
+      if (saisieTab === 'prime' && employee.primeData) {
+        // Envoyer les données Prime avec le statut
+        const primeUpdateData: any = {
+          ...employee.primeData,
+          statut: 'Soumis',
+          submittedAt: new Date().toISOString()
+        };
+        await updateEVPSubmission(id, { prime: primeUpdateData });
+      } else if (saisieTab === 'conge' && employee.congeData) {
+        // Envoyer les données Conge avec le statut
+        const congeUpdateData: any = {
+          ...employee.congeData,
+          statut: 'Soumis',
+          submittedAt: new Date().toISOString()
+        };
+        // Convertir les dates en format ISO string si elles sont des objets Date
+        if (congeUpdateData.dateDebut instanceof Date) {
+          congeUpdateData.dateDebut = congeUpdateData.dateDebut.toISOString().split('T')[0];
+        }
+        if (congeUpdateData.dateFin instanceof Date) {
+          congeUpdateData.dateFin = congeUpdateData.dateFin.toISOString().split('T')[0];
+        }
+        await updateEVPSubmission(id, { conge: congeUpdateData });
+      } else {
+        toast.error('Aucune donnée de prime ou de congé à soumettre pour cet employé.');
+        return;
+      }
+      
+      console.log('✅ Soumission mise à jour dans la base de données');
+
+      // Retirer l'employé de la liste après soumission
+      setEmployees(employees.filter(emp => emp.id !== id));
+
+      toast.success(`EVP de ${employee.nom} soumis pour validation`);
+      
+      // Recharger les données pour s'assurer de la synchronisation
+      await loadEVPSubmissions(saisieTab);
+    } catch (error) {
+      console.error('❌ Erreur lors de la soumission:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la soumission: ${errorMessage}`);
     }
-
-    // Remove the employee from the list after submission
-    setEmployees(employees.filter(emp => emp.id !== id));
-    setSubmittedCount(submittedCount + 1);
-
-    toast.success(`EVP de ${employee.nom} soumis pour validation`);
   };
 
-  const submitAll = () => {
-    const employeesWithData = employees.filter(e => e.primeData || e.congeData);
+  const submitAll = async () => {
+    try {
+      const employeesWithData = employees.filter(e => e.primeData || e.congeData);
 
-    if (employeesWithData.length === 0) {
-      toast.error('Aucune donnée à soumettre');
-      return;
+      if (employeesWithData.length === 0) {
+        toast.error('Aucune donnée à soumettre');
+        return;
+      }
+
+      // Mettre à jour le statut de tous les employés dans la base de données
+      console.log(`📤 Soumission de ${employeesWithData.length} employé(s)...`);
+      const updatePromises = employeesWithData.map(emp => {
+        if (saisieTab === 'prime' && emp.primeData) {
+          const primeUpdateData: any = {
+            ...emp.primeData,
+            statut: 'Soumis',
+            submittedAt: new Date().toISOString()
+          };
+          return updateEVPSubmission(emp.id, { prime: primeUpdateData });
+        } else if (saisieTab === 'conge' && emp.congeData) {
+          const congeUpdateData: any = {
+            ...emp.congeData,
+            statut: 'Soumis',
+            submittedAt: new Date().toISOString()
+          };
+          // Convertir les dates en format ISO string si elles sont des objets Date
+          if (congeUpdateData.dateDebut instanceof Date) {
+            congeUpdateData.dateDebut = congeUpdateData.dateDebut.toISOString().split('T')[0];
+          }
+          if (congeUpdateData.dateFin instanceof Date) {
+            congeUpdateData.dateFin = congeUpdateData.dateFin.toISOString().split('T')[0];
+          }
+          return updateEVPSubmission(emp.id, { conge: congeUpdateData });
+        }
+        return Promise.resolve();
+      });
+      await Promise.all(updatePromises);
+      console.log('✅ Toutes les soumissions mises à jour dans la base de données');
+
+      // Retirer tous les employés avec données de la liste après soumission
+      setEmployees(employees.filter(emp => !emp.primeData && !emp.congeData));
+
+      toast.success('Toutes les données ont été transmises pour validation hiérarchique', {
+        description: `${employeesWithData.length} employé(s) soumis`,
+      });
+      
+      // Recharger les données pour s'assurer de la synchronisation
+      await loadEVPSubmissions(saisieTab);
+    } catch (error) {
+      console.error('❌ Erreur lors de la soumission multiple:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la soumission: ${errorMessage}`);
     }
+  };
 
-    // Remove all employees with data from the list after submission
-    setEmployees(employees.filter(emp => !emp.primeData && !emp.congeData));
-    setSubmittedCount(submittedCount + employeesWithData.length);
+  // Delete handlers
+  const deleteEmployee = async (id: number) => {
+    try {
+      const employee = employees.find(e => e.id === id);
+      if (!employee) {
+        toast.error('Employé non trouvé');
+        return;
+      }
 
-    toast.success('Toutes les données ont été transmises pour validation hiérarchique', {
-      description: `${employeesWithData.length} employé(s) soumis`,
-    });
+      // Déterminer le type à supprimer selon l'onglet actif
+      const typeToDelete: 'Prime' | 'Congé' = saisieTab === 'prime' ? 'Prime' : 'Congé';
+
+      console.log(`🗑️ Suppression de l'employé ${employee.nom} (ID: ${id}) pour ${typeToDelete}...`);
+      await deleteEVPSubmission(id, typeToDelete);
+      console.log('✅ Suppression effectuée dans la base de données');
+
+      // Mettre à jour l'employé dans le tableau : retirer seulement les données du type supprimé
+      setEmployees(prevEmployees => {
+        return prevEmployees.map(emp => {
+          if (emp.id === id) {
+            // Retirer seulement les données du type supprimé
+            if (typeToDelete === 'Prime') {
+              // Si l'employé a encore des données Congé, on le garde avec seulement congeData
+              if (emp.congeData) {
+                return { ...emp, primeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            } else {
+              // Si l'employé a encore des données Prime, on le garde avec seulement primeData
+              if (emp.primeData) {
+                return { ...emp, congeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            }
+          }
+          return emp;
+        }).filter(emp => emp !== null) as EmployeeEVP[];
+      });
+
+      toast.success(`${typeToDelete} de ${employee.nom} supprimé avec succès`);
+      
+      // Recharger les données pour s'assurer de la synchronisation
+      await loadEVPSubmissions(saisieTab);
+    } catch (error) {
+      console.error('❌ Erreur lors de la suppression:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la suppression: ${errorMessage}`);
+    }
+  };
+
+  const deleteAll = async () => {
+    try {
+      const employeesToDelete = employees.filter(e => {
+        if (saisieTab === 'prime') return e.primeData;
+        if (saisieTab === 'conge') return e.congeData;
+        return false;
+      });
+
+      if (employeesToDelete.length === 0) {
+        toast.error('Aucune donnée à supprimer');
+        return;
+      }
+
+      const typeToDelete: 'Prime' | 'Congé' = saisieTab === 'prime' ? 'Prime' : 'Congé';
+
+      console.log(`🗑️ Suppression de ${employeesToDelete.length} employé(s) pour ${typeToDelete}...`);
+      const deletePromises = employeesToDelete.map(emp => 
+        deleteEVPSubmission(emp.id, typeToDelete)
+      );
+      await Promise.all(deletePromises);
+      console.log('✅ Toutes les suppressions effectuées dans la base de données');
+
+      // Mettre à jour les employés dans le tableau : retirer seulement les données du type supprimé
+      setEmployees(prevEmployees => {
+        return prevEmployees.map(emp => {
+          // Si cet employé avait des données du type à supprimer
+          if ((typeToDelete === 'Prime' && emp.primeData) || (typeToDelete === 'Congé' && emp.congeData)) {
+            // Retirer seulement les données du type supprimé
+            if (typeToDelete === 'Prime') {
+              // Si l'employé a encore des données Congé, on le garde avec seulement congeData
+              if (emp.congeData) {
+                return { ...emp, primeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            } else {
+              // Si l'employé a encore des données Prime, on le garde avec seulement primeData
+              if (emp.primeData) {
+                return { ...emp, congeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            }
+          }
+          // Garder les autres employés tels quels
+          return emp;
+        }).filter(emp => emp !== null) as EmployeeEVP[];
+      });
+
+      toast.success('Toutes les données ont été supprimées avec succès', {
+        description: `${employeesToDelete.length} employé(s) supprimé(s)`,
+      });
+      
+      // Recharger les données pour s'assurer de la synchronisation
+      await loadEVPSubmissions(saisieTab);
+    } catch (error) {
+      console.error('❌ Erreur lors de la suppression multiple:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la suppression: ${errorMessage}`);
+    }
   };
 
   // Note: Les employés sont maintenant gérés par le RH, donc on ne permet plus l'ajout/modification/suppression ici
   // Les gestionnaires peuvent seulement sélectionner des employés existants
 
   // Add employee to EVP saisie from dropdown
-  const handleAddEmployee = async () => {
-    if (!selectedEmployeeId) {
-      toast.error('Veuillez sélectionner un employé');
-      return;
+  const handleAddEmployee = async (type: 'Prime' | 'Congé') => {
+    try {
+      console.log(`🔄 Début de l'ajout d'un employé pour ${type}, selectedEmployeeId:`, selectedEmployeeId);
+      
+      if (!selectedEmployeeId || selectedEmployeeId === '') {
+        toast.error('Veuillez sélectionner un employé');
+        return;
+      }
+
+      const employeeId = parseInt(selectedEmployeeId, 10);
+      if (isNaN(employeeId)) {
+        toast.error('ID employé invalide');
+        setSelectedEmployeeId('');
+        return;
+      }
+
+      console.log('🔍 Vérification de l\'employé avec ID:', employeeId);
+
+      // Vérifier si l'employé existe
+      const allEmployees = await getEmployees();
+      const foundEmployee = allEmployees.find(emp => emp.id === employeeId);
+      
+      if (!foundEmployee) {
+        toast.error('Employé non trouvé');
+        setSelectedEmployeeId('');
+        return;
+      }
+
+      console.log('✅ Employé trouvé:', foundEmployee);
+
+      // Vérifier si l'employé a déjà une soumission en attente
+      let existingSubmissions: EVPSubmission[] = [];
+      try {
+        existingSubmissions = await getEVPSubmissions();
+        console.log('📋 Soumissions existantes:', existingSubmissions);
+      } catch (error) {
+        console.warn('⚠️ Erreur lors de la récupération des soumissions existantes, continuation...', error);
+      }
+      
+      // Chercher une soumission existante pour cet employé en attente
+      const existingSubmission = existingSubmissions.find(
+        sub => sub.employee && sub.employee.id === employeeId && 
+        (sub.statut === 'En attente' || !sub.statut || sub.statut === null)
+      );
+      
+      let newSubmission: EVPSubmission;
+      let isUpdate = false;
+      
+      if (existingSubmission) {
+        // Si une soumission existe déjà, vérifier si le type est déjà présent
+        if ((type === 'Prime' && existingSubmission.isPrime) || (type === 'Congé' && existingSubmission.isConge)) {
+          toast.error(`Cet employé a déjà une soumission ${type} en attente`);
+          setSelectedEmployeeId('');
+          return;
+        }
+        
+        // Mettre à jour la soumission existante pour ajouter le type manquant
+        isUpdate = true;
+        console.log(`📤 Mise à jour de la soumission EVP existante (ID: ${existingSubmission.id}) pour ajouter ${type}...`);
+        newSubmission = await updateEVPSubmission(existingSubmission.id, { type });
+        console.log('✅ Soumission mise à jour:', newSubmission);
+      } else {
+        // Créer une nouvelle soumission EVP via l'API avec le type correct
+        console.log(`📤 Création d'une nouvelle soumission EVP pour ${type}...`);
+        newSubmission = await createEVPSubmission(employeeId, type);
+        console.log('✅ Soumission créée:', newSubmission);
+      }
+      
+      if (!newSubmission || !newSubmission.id) {
+        throw new Error('La soumission n\'a pas été créée correctement');
+      }
+      
+      // Construire l'employé EVP à ajouter immédiatement au tableau
+      if (newSubmission.employee) {
+        const emp = newSubmission.employee;
+        const nomComplet = emp.prenom ? `${emp.prenom} ${emp.nom}` : emp.nom;
+        
+        // Extraire les données Prime si présentes
+        const primeData = newSubmission.prime && newSubmission.isPrime
+          ? {
+              tauxMonetaire: newSubmission.prime.tauxMonetaire?.toString() || '',
+              groupe: newSubmission.prime.groupe?.toString() || '1',
+              nombrePostes: newSubmission.prime.nombrePostes?.toString() || '',
+              scoreEquipe: newSubmission.prime.scoreEquipe?.toString() || '',
+              noteHierarchique: newSubmission.prime.noteHierarchique?.toString() || '',
+              scoreCollectif: newSubmission.prime.scoreCollectif?.toString() || '',
+              montantCalcule: typeof newSubmission.prime.montantCalcule === 'string' ? parseFloat(newSubmission.prime.montantCalcule) || 0 : (newSubmission.prime.montantCalcule || 0),
+            }
+          : null;
+        
+        // Extraire les données Congé si présentes
+        const congeData = newSubmission.conge && newSubmission.isConge
+          ? {
+              dateDebut: newSubmission.conge.dateDebut ? new Date(newSubmission.conge.dateDebut) : undefined,
+              dateFin: newSubmission.conge.dateFin ? new Date(newSubmission.conge.dateFin) : undefined,
+              nombreJours: newSubmission.conge.nombreJours || 0,
+              tranche: newSubmission.conge.tranche?.toString() || '1',
+              avanceSurConge: newSubmission.conge.avanceSurConge || false,
+              montantAvance: newSubmission.conge.montantAvance?.toString() || '',
+              indemniteForfaitaire: newSubmission.conge.indemniteForfaitaire?.toString() || '',
+              indemniteCalculee: typeof newSubmission.conge.indemniteCalculee === 'string' ? parseFloat(newSubmission.conge.indemniteCalculee) || 0 : (newSubmission.conge.indemniteCalculee || 0),
+            }
+          : null;
+        
+        const newEmployeeEVP: EmployeeEVP = {
+          id: newSubmission.id,
+          matricule: emp.matricule,
+          nom: nomComplet,
+          poste: emp.poste || '',
+          primeData,
+          congeData,
+          isSubmitted: false,
+        };
+        
+        console.log('✅ Employé EVP construit:', newEmployeeEVP);
+        
+        // Ajouter immédiatement au tableau pour un feedback visuel instantané
+        setEmployees(prevEmployees => {
+          // Vérifier qu'il n'est pas déjà présent
+          const exists = prevEmployees.some(e => e.id === newEmployeeEVP.id || e.matricule === newEmployeeEVP.matricule);
+          if (exists) {
+            console.log('⚠️ Employé déjà dans le tableau, mise à jour...');
+            return prevEmployees.map(e => 
+              e.id === newEmployeeEVP.id || e.matricule === newEmployeeEVP.matricule ? newEmployeeEVP : e
+            );
+          }
+          return [...prevEmployees, newEmployeeEVP];
+        });
+        
+        console.log('✅ Employé ajouté au tableau:', newEmployeeEVP);
+      }
+      
+      // Fermer le dialog et réinitialiser
+      setSelectedEmployeeId('');
+      setShowAddDialog(false);
+      
+      // Recharger depuis la BDD pour s'assurer de la synchronisation (en arrière-plan)
+      setTimeout(async () => {
+        try {
+          await loadEVPSubmissions(saisieTab);
+          await loadMasterEmployees();
+        } catch (error) {
+          console.warn('⚠️ Erreur lors du rechargement en arrière-plan:', error);
+        }
+      }, 500);
+      
+      toast.success(isUpdate 
+        ? `Type ${type} ajouté à la soumission existante avec succès`
+        : `Employé ajouté pour ${type} avec succès`);
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'ajout de l\'employé:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue lors de l\'ajout de l\'employé';
+      toast.error(`Erreur: ${errorMessage}`);
+      // Réinitialiser l'état en cas d'erreur
+      setSelectedEmployeeId('');
     }
-
-    // Recharger les employés depuis la BDD pour avoir les dernières données
-    await loadMasterEmployees();
-    
-    const masterEmployee = masterEmployees.find(emp => emp.id.toString() === selectedEmployeeId);
-    if (!masterEmployee) {
-      toast.error('Employé non trouvé');
-      return;
-    }
-
-    if (employees.some(emp => emp.matricule === masterEmployee.matricule)) {
-      toast.error('Cet employé est déjà dans la liste de saisie EVP');
-      return;
-    }
-
-    setEmployees([
-      ...employees,
-      {
-        id: Date.now(),
-        matricule: masterEmployee.matricule,
-        nom: masterEmployee.nom,
-        poste: masterEmployee.poste,
-        primeData: null,
-        congeData: null,
-        isSubmitted: false,
-      },
-    ]);
-
-    setSelectedEmployeeId('');
-    setShowAddDialog(false);
-    toast.success('Employé ajouté avec succès');
   };
 
   // Request missing employee to RH
-  const handleRequestEmployee = () => {
-    toast.success('Demande envoyée au service RH', {
-      description: 'Le service RH traitera votre demande dans les plus brefs délais',
-    });
-    setShowRequestDialog(false);
+  const handleRequestEmployee = async () => {
+    try {
+      // Validation
+      if (!requestForm.matricule || !requestForm.nom || !requestForm.prenom || !requestForm.raison) {
+        toast.error('Veuillez remplir tous les champs');
+        return;
+      }
+
+      console.log('📤 Envoi de la demande au RH:', requestForm);
+      await createEmployeeRequest(requestForm);
+      
+      toast.success('Demande envoyée au service RH', {
+        description: 'Le service RH traitera votre demande dans les plus brefs délais',
+      });
+      
+      // Réinitialiser le formulaire
+      setRequestForm({
+        matricule: '',
+        nom: '',
+        prenom: '',
+        raison: '',
+      });
+      setShowRequestDialog(false);
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'envoi de la demande:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de l'envoi de la demande: ${errorMessage}`);
+    }
   };
 
   return (
@@ -576,7 +1314,12 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                       ) : (
                         <CalendarDays className="w-5 h-5 text-blue-600" />
                       )}
-                      Tableau de saisie {saisieTab === 'prime' ? 'Primes' : 'Congés'} - Période: Octobre 2025
+                      Tableau de saisie {saisieTab === 'prime' ? 'Primes' : 'Congés'} - Période: {(() => {
+                        const now = new Date();
+                        const month = now.toLocaleDateString('fr-FR', { month: 'long' });
+                        const year = now.getFullYear();
+                        return month.charAt(0).toUpperCase() + month.slice(1) + ' ' + year;
+                      })()}
                     </span>
                     <div className="flex gap-3">
                       <Button
@@ -593,17 +1336,28 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                         Synchroniser
                       </Button>
                       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-                        <Button
-                          onClick={() => setShowAddDialog(true)}
-                          variant="outline"
-                          className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                        >
-                          <Plus className="w-4 h-4 mr-2" />
-                          Ajouter employé
-                        </Button>
+                        {saisieTab === 'prime' ? (
+                          <Button
+                            onClick={() => setShowAddDialog(true)}
+                            variant="outline"
+                            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          >
+                            <Plus className="w-4 h-4 mr-2" />
+                            Ajouter Prime
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={() => setShowAddDialog(true)}
+                            variant="outline"
+                            className="border-blue-200 text-blue-700 hover:bg-blue-50"
+                          >
+                            <Plus className="w-4 h-4 mr-2" />
+                            Ajouter Congé
+                          </Button>
+                        )}
                         <DialogContent>
                           <DialogHeader>
-                            <DialogTitle>Ajouter un employé à la saisie EVP</DialogTitle>
+                            <DialogTitle>Ajouter un employé pour {saisieTab === 'prime' ? 'Prime' : 'Congé'}</DialogTitle>
                             <DialogDescription>
                               Sélectionnez un employé de votre équipe dans la liste déroulante
                             </DialogDescription>
@@ -611,34 +1365,47 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                           <div className="space-y-4 mt-4">
                             <div>
                               <label className="text-sm text-slate-700 mb-2 block">Sélectionner un employé</label>
-                              <Select value={selectedEmployeeId} onValueChange={setSelectedEmployeeId}>
+                              <Select value={selectedEmployeeId || ""} onValueChange={setSelectedEmployeeId}>
                                 <SelectTrigger>
-                                  <SelectValue placeholder="Choisir un employé..." />
+                                  <SelectValue placeholder={loadingEmployees ? "Chargement..." : masterEmployees.length === 0 ? "Aucun employé disponible" : availableEmployees.length === 0 ? "Tous les employés sont déjà dans la liste" : "Choisir un employé..."} />
                                 </SelectTrigger>
                                 <SelectContent>
                                   {loadingEmployees ? (
-                                    <SelectItem value="" disabled>Chargement...</SelectItem>
+                                    <div className="px-2 py-1.5 text-sm text-slate-500">Chargement...</div>
                                   ) : masterEmployees.length === 0 ? (
-                                    <SelectItem value="" disabled>Aucun employé disponible</SelectItem>
+                                    <div className="px-2 py-1.5 text-sm text-slate-500">Aucun employé disponible</div>
+                                  ) : availableEmployees.length === 0 ? (
+                                    <div className="px-2 py-1.5 text-sm text-slate-500">Tous les employés sont déjà dans la liste</div>
                                   ) : (
-                                    masterEmployees.map((emp) => (
-                                      <SelectItem key={emp.id} value={emp.id.toString()}>
-                                        {emp.matricule} - {emp.nom} ({emp.poste})
-                                      </SelectItem>
-                                    ))
+                                    availableEmployees.map((emp) => {
+                                      const empId = String(emp.id);
+                                      if (!empId || empId === '') {
+                                        console.warn('Employé avec ID invalide:', emp);
+                                        return null;
+                                      }
+                                      return (
+                                        <SelectItem key={emp.id} value={empId}>
+                                          {emp.matricule} - {emp.nom} ({emp.poste})
+                                        </SelectItem>
+                                      );
+                                    }).filter(Boolean)
                                   )}
                                 </SelectContent>
                               </Select>
                             </div>
                             {selectedEmployeeId && masterEmployees.find(emp => emp.id.toString() === selectedEmployeeId) && (
-                              <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
-                                <p className="text-sm text-emerald-900">
+                              <div className={`p-4 border rounded-xl ${
+                                saisieTab === 'prime' 
+                                  ? 'bg-emerald-50 border-emerald-100' 
+                                  : 'bg-blue-50 border-blue-100'
+                              }`}>
+                                <p className={`text-sm ${saisieTab === 'prime' ? 'text-emerald-900' : 'text-blue-900'}`}>
                                   <strong>Matricule:</strong> {masterEmployees.find(emp => emp.id.toString() === selectedEmployeeId)?.matricule}
                                 </p>
-                                <p className="text-sm text-emerald-900">
+                                <p className={`text-sm ${saisieTab === 'prime' ? 'text-emerald-900' : 'text-blue-900'}`}>
                                   <strong>Nom:</strong> {masterEmployees.find(emp => emp.id.toString() === selectedEmployeeId)?.nom}
                                 </p>
-                                <p className="text-sm text-emerald-900">
+                                <p className={`text-sm ${saisieTab === 'prime' ? 'text-emerald-900' : 'text-blue-900'}`}>
                                   <strong>Poste:</strong> {masterEmployees.find(emp => emp.id.toString() === selectedEmployeeId)?.poste}
                                 </p>
                               </div>
@@ -648,8 +1415,11 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                             <Button variant="outline" onClick={() => { setShowAddDialog(false); setSelectedEmployeeId(''); }}>
                               Annuler
                             </Button>
-                            <Button onClick={handleAddEmployee} className="bg-emerald-600 hover:bg-emerald-700">
-                              Ajouter
+                            <Button 
+                              onClick={() => handleAddEmployee(saisieTab === 'prime' ? 'Prime' : 'Congé')} 
+                              className={saisieTab === 'prime' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'}
+                            >
+                              Ajouter {saisieTab === 'prime' ? 'Prime' : 'Congé'}
                             </Button>
                           </DialogFooter>
                         </DialogContent>
@@ -662,6 +1432,15 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                       >
                         <Send className="w-4 h-4 mr-2" />
                         Soumettre tout pour validation
+                      </Button>
+                      <Button
+                        onClick={deleteAll}
+                        variant="destructive"
+                        className="bg-red-600 hover:bg-red-700"
+                        disabled={pendingCount === 0}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Supprimer tout
                       </Button>
                     </div>
                   </CardTitle>
@@ -684,7 +1463,24 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                         </tr>
                       </thead>
                       <tbody>
-                        {employees.map((employee) => (
+                        {employees.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-8 px-4 text-center text-slate-500">
+                              {loadingSubmissions ? (
+                                <div className="flex items-center justify-center gap-2">
+                                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-emerald-600"></div>
+                                  <span>Chargement des employés...</span>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center gap-2">
+                                  <p>Aucun employé dans la liste de saisie EVP</p>
+                                  <p className="text-xs text-slate-400">Cliquez sur "Ajouter employé" pour commencer</p>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ) : (
+                          employees.map((employee) => (
                           <tr key={employee.id} className="border-b border-slate-100 hover:bg-slate-50">
                             <td className="py-3 px-4">
                               <Badge variant="outline" className="border-emerald-200 text-emerald-700">
@@ -723,17 +1519,29 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                               </span>
                             </td>
                             <td className="py-3 px-4">
-                              <Button
-                                size="sm"
-                                onClick={() => submitEmployee(employee.id)}
-                                className="bg-emerald-600 hover:bg-emerald-700 h-8"
-                                disabled={!employee.primeData && !employee.congeData}
-                              >
-                                Soumettre
-                              </Button>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => submitEmployee(employee.id)}
+                                  className="bg-emerald-600 hover:bg-emerald-700 h-8"
+                                  disabled={!employee.primeData && !employee.congeData}
+                                >
+                                  Soumettre
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={() => deleteEmployee(employee.id)}
+                                  variant="destructive"
+                                  className="bg-red-600 hover:bg-red-700 h-8"
+                                  disabled={!employee.primeData && !employee.congeData}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
                             </td>
                           </tr>
-                        ))}
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -776,123 +1584,334 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
 
               <Card className="border-slate-200">
                 <CardHeader>
-                  <CardTitle>Détail des soumissions par employé</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Détail des soumissions par employé</CardTitle>
+                    <div className="relative w-64">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4" />
+                      <input
+                        type="text"
+                        placeholder="Rechercher par matricule, nom, poste..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Type EVP</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant (DH)</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Commentaire</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45872</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Ahmed Bennani</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">TAMCA</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">Prime de performance</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">2,850 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-10</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Validé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-600 italic">Excellent travail</td>
-                        </tr>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45873</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Fatima Zahra Alami</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">OE</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-blue-50 text-blue-700 border border-blue-200">Congé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">1,200 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-10</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Validé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-600 italic">Approuvé</td>
-                        </tr>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45874</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Mohammed Tazi</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">TAMCA</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">Prime de performance</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">3,100 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-08</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-orange-100 text-orange-700 border-orange-200">En attente</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-400 italic">-</td>
-                        </tr>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45875</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Salma Benjelloun</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">OE</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-blue-50 text-blue-700 border border-blue-200">Congé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">950 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-08</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-red-100 text-red-700 border-red-200">Rejeté</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-red-600 italic">Dates incorrectes</td>
-                        </tr>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45872</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Ahmed Bennani</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">TAMCA</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-blue-50 text-blue-700 border border-blue-200">Congé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">1,450 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-05</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Validé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-600 italic">Conforme</td>
-                        </tr>
-                        <tr className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="py-3 px-4">
-                            <Badge variant="outline" className="border-emerald-200 text-emerald-700">45876</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">Karim Idrissi</td>
-                          <td className="py-3 px-4 text-sm text-slate-600">TAMCA</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">Prime de performance</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-900">2,600 DH</td>
-                          <td className="py-3 px-4 text-sm text-slate-700">2025-10-03</td>
-                          <td className="py-3 px-4">
-                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Validé</Badge>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-slate-600 italic">RAS</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                  {loadingHistory ? (
+                    <div className="text-center py-8">
+                      <p className="text-slate-600">Chargement de l'historique...</p>
+                    </div>
+                  ) : filteredHistoricalSubmissions.length === 0 ? (
+                    <div className="text-center py-8">
+                      <p className="text-slate-600">
+                        {searchTerm ? 'Aucun résultat trouvé pour votre recherche.' : 'Aucune soumission dans l\'historique.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Type EVP</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Prime (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Indemnité (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Durée Congé</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Soumis</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Service</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Commentaire</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredHistoricalSubmissions.map((submission: EVPSubmission) => {
+                            const emp = submission.employee;
+                            if (!emp) return null;
+                            
+                            const nomComplet = emp.prenom ? `${emp.prenom} ${emp.nom}` : emp.nom;
+                            const types: string[] = [];
+                            let montantPrime: string | number = '-';
+                            let montantIndemnite: string | number = '-';
+                            let dureeConge: string = '-';
+                            
+                            // Dates de soumission - deux lignes empilées
+                            const formatDate = (dateStr: string | undefined) => {
+                              if (!dateStr) return null;
+                              return new Date(dateStr).toLocaleDateString('fr-FR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric'
+                              });
+                            };
+                            const datePrime = formatDate(submission.prime?.submittedAt);
+                            const dateConge = formatDate(submission.conge?.submittedAt);
+                            
+                            // Traiter Prime
+                            if (submission.isPrime && submission.prime) {
+                              types.push('Prime');
+                              montantPrime = submission.prime.montantCalcule 
+                                ? (typeof submission.prime.montantCalcule === 'string' 
+                                    ? parseFloat(submission.prime.montantCalcule) 
+                                    : submission.prime.montantCalcule)
+                                : 0;
+                            }
+                            
+                            // Traiter Congé
+                            if (submission.isConge && submission.conge) {
+                              types.push('Congé');
+                              montantIndemnite = submission.conge.indemniteCalculee 
+                                ? (typeof submission.conge.indemniteCalculee === 'string' 
+                                    ? parseFloat(submission.conge.indemniteCalculee) 
+                                    : submission.conge.indemniteCalculee)
+                                : 0;
+                              dureeConge = submission.conge.nombreJours 
+                                ? `${submission.conge.nombreJours} jour(s)`
+                                : '-';
+                            }
+
+                            // Déterminer les réponses Service et Division pour Prime
+                            const getPrimeServiceResponse = () => {
+                              if (!submission.prime) return null;
+                              const statut = submission.prime.statut || 'En attente';
+                              if (statut === 'Rejeté') return 'Rejetée';
+                              if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                              return 'En attente';
+                            };
+
+                            const getPrimeDivisionResponse = () => {
+                              if (!submission.prime) return null;
+                              const statut = submission.prime.statut || 'En attente';
+                              if (statut === 'Rejeté') return 'Rejetée';
+                              if (statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                              if (statut === 'Validé Service') return 'En attente';
+                              return 'En attente';
+                            };
+
+                            // Déterminer les réponses Service et Division pour Congé
+                            const getCongeServiceResponse = () => {
+                              if (!submission.conge) return null;
+                              const statut = submission.conge.statut || 'En attente';
+                              if (statut === 'Rejeté') return 'Rejetée';
+                              if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                              return 'En attente';
+                            };
+
+                            const getCongeDivisionResponse = () => {
+                              if (!submission.conge) return null;
+                              const statut = submission.conge.statut || 'En attente';
+                              // Si rejeté par le service, ne pas afficher de statut Division (laisser vide)
+                              if (statut === 'Rejeté') return null;
+                              if (statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                              if (statut === 'Validé Service') return 'En attente';
+                              return 'En attente';
+                            };
+
+                            // Commentaires - combiner Prime et Congé
+                            const commentairePrime = submission.prime?.commentaire || null;
+                            const commentaireConge = submission.conge?.commentaire || null;
+                            
+                            return (
+                              <tr key={submission.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                <td className="py-3 px-4">
+                                  <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                                    {emp.matricule || '-'}
+                                  </Badge>
+                                </td>
+                                <td className="py-3 px-4 text-sm text-slate-900">{nomComplet}</td>
+                                <td className="py-3 px-4 text-sm text-slate-600">{emp.poste || '-'}</td>
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1">
+                                    {types.map((type, idx) => (
+                                      <Badge 
+                                        key={idx}
+                                        className={type === 'Prime' 
+                                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                          : 'bg-blue-50 text-blue-700 border border-blue-200'}
+                                      >
+                                        {type}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4 text-sm text-slate-900">
+                                  {montantPrime !== '-' ? `${typeof montantPrime === 'number' ? montantPrime.toLocaleString('fr-FR') : montantPrime} DH` : '-'}
+                                </td>
+                                <td className="py-3 px-4 text-sm text-slate-900">
+                                  {montantIndemnite !== '-' ? `${typeof montantIndemnite === 'number' ? montantIndemnite.toLocaleString('fr-FR') : montantIndemnite} DH` : '-'}
+                                </td>
+                                <td className="py-3 px-4 text-sm text-slate-600">{dureeConge}</td>
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1 text-sm text-slate-600">
+                                    {datePrime && (
+                                      <div>{datePrime}</div>
+                                    )}
+                                    {dateConge && (
+                                      <div>{dateConge}</div>
+                                    )}
+                                    {!datePrime && !dateConge && <span>-</span>}
+                                  </div>
+                                </td>
+                                {/* Colonne Soumis */}
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1">
+                                    {submission.isPrime && submission.prime && (
+                                      <div className="mb-1">
+                                        {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
+                                        {submission.prime.submittedAt && (submission.prime.statut === 'Soumis' || submission.prime.commentaire) && (
+                                          <div className="flex flex-col gap-1">
+                                            <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-xs">Modifié</Badge>
+                                            <span className="text-xs text-slate-500">
+                                              {new Date(submission.prime.submittedAt).toLocaleDateString('fr-FR', {
+                                                day: '2-digit',
+                                                month: '2-digit',
+                                                year: 'numeric'
+                                              })}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {/* Sinon, afficher "Oui" si soumis */}
+                                        {(!submission.prime.submittedAt || (submission.prime.statut !== 'Soumis' && !submission.prime.commentaire)) && (
+                                          <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-xs">Oui</Badge>
+                                        )}
+                                      </div>
+                                    )}
+                                    {submission.isConge && submission.conge && (
+                                      <div>
+                                        {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
+                                        {submission.conge.submittedAt && (submission.conge.statut === 'Soumis' || submission.conge.commentaire) && (
+                                          <div className="flex flex-col gap-1">
+                                            <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-xs">Modifié</Badge>
+                                            <span className="text-xs text-slate-500">
+                                              {new Date(submission.conge.submittedAt).toLocaleDateString('fr-FR', {
+                                                day: '2-digit',
+                                                month: '2-digit',
+                                                year: 'numeric'
+                                              })}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {/* Sinon, afficher "Oui" si soumis */}
+                                        {(!submission.conge.submittedAt || (submission.conge.statut !== 'Soumis' && !submission.conge.commentaire)) && (
+                                          <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-xs">Oui</Badge>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!submission.isPrime && !submission.isConge && (
+                                      <span className="text-slate-400 text-xs">-</span>
+                                    )}
+                                  </div>
+                                </td>
+                                {/* Colonne Service */}
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1">
+                                    {submission.isPrime && submission.prime && (
+                                      <div className="mb-1">
+                                        {getPrimeServiceResponse() === 'Validée' && (
+                                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                        )}
+                                        {getPrimeServiceResponse() === 'Rejetée' && (
+                                          <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">Rejetée</Badge>
+                                        )}
+                                        {getPrimeServiceResponse() === 'En attente' && (
+                                          <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                        )}
+                                      </div>
+                                    )}
+                                    {submission.isConge && submission.conge && (
+                                      <div>
+                                        {getCongeServiceResponse() === 'Validée' && (
+                                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                        )}
+                                        {getCongeServiceResponse() === 'Rejetée' && (
+                                          <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">Rejetée</Badge>
+                                        )}
+                                        {getCongeServiceResponse() === 'En attente' && (
+                                          <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!submission.isPrime && !submission.isConge && (
+                                      <span className="text-slate-400 text-xs">-</span>
+                                    )}
+                                  </div>
+                                </td>
+                                {/* Colonne Division */}
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1">
+                                    {submission.isPrime && submission.prime && (
+                                      <div className="mb-1">
+                                        {getPrimeDivisionResponse() === 'Validée' && (
+                                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                        )}
+                                        {getPrimeDivisionResponse() === 'En attente' && (
+                                          <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                        )}
+                                        {getPrimeDivisionResponse() === null && (
+                                          <span className="text-slate-400 text-xs">-</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {submission.isConge && submission.conge && (
+                                      <div>
+                                        {getCongeDivisionResponse() === 'Validée' && (
+                                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                        )}
+                                        {getCongeDivisionResponse() === 'En attente' && (
+                                          <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                        )}
+                                        {getCongeDivisionResponse() === null && (
+                                          <span className="text-slate-400 text-xs">-</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {!submission.isPrime && !submission.isConge && (
+                                      <span className="text-slate-400 text-xs">-</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3 px-4">
+                                  <div className="flex flex-col gap-1 text-sm text-slate-600 italic">
+                                    {/* Prime en haut */}
+                                    {commentairePrime && (
+                                      <div>
+                                        <span className={submission.prime?.statut === 'Rejeté' ? 'text-red-600' : ''}>{commentairePrime}</span>
+                                      </div>
+                                    )}
+                                    {/* Congé en bas */}
+                                    {commentaireConge && (
+                                      <div>
+                                        <span className={submission.conge?.statut === 'Rejeté' ? 'text-red-600' : ''}>{commentaireConge}</span>
+                                      </div>
+                                    )}
+                                    {/* Si un seul commentaire, aligner correctement - Prime en haut, Congé en bas */}
+                                    {commentairePrime && !commentaireConge && (
+                                      <div></div>
+                                    )}
+                                    {!commentairePrime && commentaireConge && (
+                                      <div className="h-5"></div>
+                                    )}
+                                    {!commentairePrime && !commentaireConge && (
+                                      <span className="text-slate-400">-</span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {!loadingHistory && filteredHistoricalSubmissions.length > 0 && (
+                    <div className="mt-4 text-sm text-slate-600">
+                      Affichage de {filteredHistoricalSubmissions.length} soumission(s)
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -1011,60 +2030,53 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
 
           <div className="grid grid-cols-2 gap-4 py-4">
             <div className="space-y-2">
-              <label className="text-sm text-slate-700">Date début</label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left">
-                    <CalendarDays className="mr-2 h-4 w-4" />
-                    {congeForm.dateDebut ? format(congeForm.dateDebut, 'dd/MM/yyyy', { locale: fr }) : 'Sélectionner'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={congeForm.dateDebut}
-                    onSelect={(date) => {
-                      const jours = calculateCongeJours(date, congeForm.dateFin);
-                      setCongeForm({ ...congeForm, dateDebut: date, nombreJours: jours });
-                    }}
-                    locale={fr}
-                  />
-                </PopoverContent>
-              </Popover>
+              <label className="text-sm text-slate-700 font-medium">Date début * (JJ/MM/AAAA)</label>
+              <Input
+                type="text"
+                placeholder="JJ/MM/AAAA"
+                value={dateDebutText}
+                onChange={(e) => handleDateDebutChange(e.target.value)}
+                maxLength={10}
+                className="font-mono"
+              />
+              {dateDebutText.length === 10 && !congeForm.dateDebut && (
+                <p className="text-xs text-red-500">Date invalide. Format attendu: JJ/MM/AAAA</p>
+              )}
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-slate-700">Date fin</label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="w-full justify-start text-left">
-                    <CalendarDays className="mr-2 h-4 w-4" />
-                    {congeForm.dateFin ? format(congeForm.dateFin, 'dd/MM/yyyy', { locale: fr }) : 'Sélectionner'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={congeForm.dateFin}
-                    onSelect={(date) => {
-                      const jours = calculateCongeJours(congeForm.dateDebut, date);
-                      setCongeForm({ ...congeForm, dateFin: date, nombreJours: jours });
-                    }}
-                    locale={fr}
-                    disabled={(date) => congeForm.dateDebut ? date < congeForm.dateDebut : false}
-                  />
-                </PopoverContent>
-              </Popover>
+              <label className="text-sm text-slate-700 font-medium">Date fin * (JJ/MM/AAAA)</label>
+              <Input
+                type="text"
+                placeholder="JJ/MM/AAAA"
+                value={dateFinText}
+                onChange={(e) => handleDateFinChange(e.target.value)}
+                maxLength={10}
+                className="font-mono"
+                disabled={!congeForm.dateDebut}
+              />
+              {dateFinText.length === 10 && !congeForm.dateFin && (
+                <p className="text-xs text-red-500">Date invalide. Format attendu: JJ/MM/AAAA</p>
+              )}
+              {!congeForm.dateDebut && (
+                <p className="text-xs text-slate-500">Sélectionnez d'abord la date début</p>
+              )}
             </div>
 
             <div className="space-y-2">
               <label className="text-sm text-slate-700">Nombre de jours</label>
               <Input
                 type="number"
-                value={congeForm.nombreJours}
+                value={congeForm.nombreJours || 0}
                 disabled
                 className="bg-slate-50"
+                placeholder={congeForm.dateDebut && congeForm.dateFin ? "Calculé automatiquement" : "Sélectionnez les dates"}
               />
+              {congeForm.dateDebut && congeForm.dateFin && congeForm.nombreJours > 0 && (
+                <p className="text-xs text-slate-500 mt-1">
+                  Du {dateDebutText} au {dateFinText} = {congeForm.nombreJours} jour{congeForm.nombreJours > 1 ? 's' : ''}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -1121,8 +2133,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                 <p className="text-sm text-blue-900 flex items-center gap-2">
                   <CalendarDays className="w-5 h-5" />
                   <strong>
-                    Congé du {congeForm.dateDebut && format(congeForm.dateDebut, 'dd/MM', { locale: fr })} au{' '}
-                    {congeForm.dateFin && format(congeForm.dateFin, 'dd/MM', { locale: fr })} — {congeForm.nombreJours} jours
+                    Congé du {dateDebutText} au {dateFinText} — {congeForm.nombreJours} jours
                   </strong>
                 </p>
                 <p className="text-sm text-blue-900">
@@ -1162,20 +2173,43 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
               </p>
             </div>
             <div>
-              <label className="text-sm text-slate-700 mb-2 block">Matricule de l'employé</label>
-              <Input placeholder="Ex: 45890" />
+              <label className="text-sm text-slate-700 mb-2 block">Matricule de l'employé *</label>
+              <Input 
+                placeholder="Ex: 45890" 
+                value={requestForm.matricule}
+                onChange={(e) => setRequestForm({ ...requestForm, matricule: e.target.value })}
+              />
             </div>
             <div>
-              <label className="text-sm text-slate-700 mb-2 block">Nom et prénom</label>
-              <Input placeholder="Ex: Hassan Benjelloun" />
+              <label className="text-sm text-slate-700 mb-2 block">Nom *</label>
+              <Input 
+                placeholder="Ex: Benjelloun" 
+                value={requestForm.nom}
+                onChange={(e) => setRequestForm({ ...requestForm, nom: e.target.value })}
+              />
             </div>
             <div>
-              <label className="text-sm text-slate-700 mb-2 block">Raison de la demande</label>
-              <Input placeholder="Ex: Nouvel employé non enregistré" />
+              <label className="text-sm text-slate-700 mb-2 block">Prénom *</label>
+              <Input 
+                placeholder="Ex: Hassan" 
+                value={requestForm.prenom}
+                onChange={(e) => setRequestForm({ ...requestForm, prenom: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-sm text-slate-700 mb-2 block">Raison de la demande *</label>
+              <Input 
+                placeholder="Ex: Nouvel employé non enregistré" 
+                value={requestForm.raison}
+                onChange={(e) => setRequestForm({ ...requestForm, raison: e.target.value })}
+              />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRequestDialog(false)}>
+            <Button variant="outline" onClick={() => {
+              setShowRequestDialog(false);
+              setRequestForm({ matricule: '', nom: '', prenom: '', raison: '' });
+            }}>
               Annuler
             </Button>
             <Button onClick={handleRequestEmployee} className="bg-blue-600 hover:bg-blue-700">

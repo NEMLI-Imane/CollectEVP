@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback } from './ui/avatar';
 import { Switch } from './ui/switch';
 import { LayoutDashboard, FileText, Download, Database, LogOut, CheckCircle2, Search, Menu, Users, UserPlus, MessageSquarePlus, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, Employee } from '../services/api';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, Employee, getEmployeeRequests, processEmployeeRequest, EmployeeRequest, getEVPSubmissions, EVPSubmission } from '../services/api';
 import {
   Select,
   SelectContent,
@@ -45,15 +45,7 @@ interface EVPRecord {
 }
 
 
-interface ManagerRequest {
-  id: number;
-  matricule: string;
-  nomPrenom: string;
-  raison: string;
-  requestedBy: string;
-  requestDate: string;
-  status: 'pending' | 'processed' | 'rejected';
-}
+// ManagerRequest interface is now using EmployeeRequest from API
 
 export default function RHPage({ user, onLogout }: RHPageProps) {
   const [currentPage, setCurrentPage] = useState<'dashboard' | 'reporting' | 'export' | 'settings' | 'employees' | 'requests'>('dashboard');
@@ -87,6 +79,14 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     if (currentPage === 'employees') {
       loadEmployees();
     }
+    if (currentPage === 'requests') {
+      console.log('🔄 Chargement des demandes car currentPage = requests');
+      loadEmployeeRequests();
+    }
+    if (currentPage === 'reporting') {
+      console.log('🔄 Chargement de l\'historique pour le reporting');
+      loadHistoricalSubmissions();
+    }
   }, [currentPage]);
 
   const loadEmployees = async () => {
@@ -106,12 +106,168 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
       setLoading(false);
     }
   };
+
+  const loadEmployeeRequests = async () => {
+    try {
+      setLoadingRequests(true);
+      console.log('📥 Chargement des demandes d\'employé depuis l\'API...');
+      const data = await getEmployeeRequests();
+      console.log('✅ Demandes chargées depuis l\'API:', data);
+      console.log('📊 Nombre de demandes:', data.length);
+      setManagerRequests(data);
+      if (data.length === 0) {
+        console.warn('⚠️ Aucune demande trouvée dans la base de données');
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des demandes:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Erreur inconnue';
+      console.error('❌ Détails de l\'erreur:', errorMessage);
+      toast.error('Erreur lors du chargement des demandes: ' + errorMessage);
+    } finally {
+      setLoadingRequests(false);
+    }
+  };
+
+  const handleProcessRequest = async (requestId: number, action: 'approve' | 'reject') => {
+    try {
+      if (action === 'approve') {
+        // Ouvrir le dialogue pour compléter les informations
+        const request = managerRequests.find(r => r.id === requestId);
+        if (request) {
+          setSelectedRequest(request);
+          setApproveForm({ poste: '', service: '', division: '' });
+          setShowApproveDialog(true);
+        }
+      } else {
+        // Rejeter directement
+        await processEmployeeRequest(requestId, 'reject');
+        toast.success('Demande rejetée avec succès');
+        await loadEmployeeRequests();
+        await loadEmployees(); // Recharger les employés au cas où
+      }
+    } catch (error) {
+      console.error('Erreur lors du traitement de la demande:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors du traitement: ${errorMessage}`);
+    }
+  };
+
+  const handleApproveWithDetails = async () => {
+    if (!selectedRequest) return;
+
+    try {
+      // Validation
+      if (!approveForm.poste || !approveForm.service || !approveForm.division) {
+        toast.error('Veuillez remplir tous les champs (poste, service, division)');
+        return;
+      }
+
+      console.log('📤 Approbation de la demande avec détails:', { requestId: selectedRequest.id, approveForm });
+      await processEmployeeRequest(selectedRequest.id, 'approve', approveForm);
+      
+      toast.success('Employé créé avec succès');
+      setShowApproveDialog(false);
+      setSelectedRequest(null);
+      setApproveForm({ poste: '', service: '', division: '' });
+      
+      // Recharger les demandes et les employés
+      await loadEmployeeRequests();
+      await loadEmployees();
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'approbation:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de l'approbation: ${errorMessage}`);
+    }
+  };
+
+  // Charger l'historique des soumissions pour le reporting
+  const loadHistoricalSubmissions = async () => {
+    try {
+      setLoadingHistorical(true);
+      console.log('📥 Chargement de l\'historique des soumissions EVP...');
+      const allSubmissions = await getEVPSubmissions();
+      
+      // Filtrer pour ne garder que les soumissions soumises/validées/rejetées (pas "En attente")
+      const historical = allSubmissions.filter(sub => {
+        const primeStatus = sub.prime?.statut;
+        const congeStatus = sub.conge?.statut;
+        // Garder si au moins une des deux (Prime ou Congé) est soumise/validée/rejetée
+        return (primeStatus && primeStatus !== 'En attente') || (congeStatus && congeStatus !== 'En attente');
+      });
+
+      // Trier par date de soumission (les plus récentes en premier)
+      historical.sort((a, b) => {
+        const dateA = a.prime?.submittedAt || a.conge?.submittedAt || '';
+        const dateB = b.prime?.submittedAt || b.conge?.submittedAt || '';
+        return dateB.localeCompare(dateA); // Ordre décroissant (plus récent en premier)
+      });
+
+      console.log('✅ Historique chargé:', historical.length, 'soumissions');
+      setHistoricalSubmissions(historical);
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement de l\'historique:', error);
+      toast.error('Erreur lors du chargement de l\'historique: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingHistorical(false);
+    }
+  };
+
   
   // Manager requests
-  const [managerRequests, setManagerRequests] = useState<ManagerRequest[]>([
-    { id: 1, matricule: '45890', nomPrenom: 'Hassan Benjelloun', raison: 'Nouvel employé', requestedBy: 'Ahmed Bennani', requestDate: '2025-10-20', status: 'pending' },
-    { id: 2, matricule: '45891', nomPrenom: 'Samira El Fassi', raison: 'Employé non déclaré', requestedBy: 'Fatima Alami', requestDate: '2025-10-18', status: 'pending' },
-  ]);
+  const [managerRequests, setManagerRequests] = useState<EmployeeRequest[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState(false);
+  const [showApproveDialog, setShowApproveDialog] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<EmployeeRequest | null>(null);
+  const [approveForm, setApproveForm] = useState({
+    poste: '',
+    service: '',
+    division: '',
+  });
+
+  // Reporting - Historical submissions
+  const [historicalSubmissions, setHistoricalSubmissions] = useState<EVPSubmission[]>([]);
+  const [loadingHistorical, setLoadingHistorical] = useState(false);
+  const [reportingSearchTerm, setReportingSearchTerm] = useState('');
+  const [reportingFilterDivision, setReportingFilterDivision] = useState('all');
+  const [reportingFilterStatus, setReportingFilterStatus] = useState('all');
+  const [reportingFilterGestionnaire, setReportingFilterGestionnaire] = useState('all');
+
+  // Filtrer les soumissions historiques pour le reporting
+  const filteredHistoricalSubmissions = historicalSubmissions.filter(sub => {
+    const employee = sub.employee;
+    if (!employee) return false;
+
+    // Filtre par recherche (matricule, nom, prénom, poste)
+    const searchLower = reportingSearchTerm.toLowerCase();
+    const matchesSearch = !reportingSearchTerm || 
+      employee.matricule?.toLowerCase().includes(searchLower) ||
+      employee.nom?.toLowerCase().includes(searchLower) ||
+      employee.prenom?.toLowerCase().includes(searchLower) ||
+      employee.poste?.toLowerCase().includes(searchLower);
+
+    // Filtre par division
+    const matchesDivision = reportingFilterDivision === 'all' || employee.division === reportingFilterDivision;
+
+    // Filtre par statut
+    const primeStatus = sub.prime?.statut;
+    const congeStatus = sub.conge?.statut;
+    const currentStatus = primeStatus || congeStatus || 'En attente';
+    const matchesStatus = reportingFilterStatus === 'all' || 
+      (reportingFilterStatus === 'soumis' && currentStatus === 'Soumis') ||
+      (reportingFilterStatus === 'valide' && currentStatus === 'Validé') ||
+      (reportingFilterStatus === 'rejete' && currentStatus === 'Rejeté');
+
+    // Filtre par gestionnaire
+    const matchesGestionnaire = reportingFilterGestionnaire === 'all' || 
+      sub.submittedBy?.name === reportingFilterGestionnaire;
+
+    return matchesSearch && matchesDivision && matchesStatus && matchesGestionnaire;
+  });
+
+  // Obtenir la liste unique des gestionnaires
+  const uniqueGestionnaires = Array.from(
+    new Set(historicalSubmissions.map(sub => sub.submittedBy?.name).filter(Boolean))
+  ).sort();
 
   const records: EVPRecord[] = [
     { id: 1, matricule: 'OCP001', employee: 'Khalid Mansouri', division: 'Production', service: 'Maintenance', type: 'Prime', amount: '2500 DH', submittedDate: '2025-10-10', validatedDate: '2025-10-11', status: 'validated', validatedBy: 'F. Alami' },
@@ -232,12 +388,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     }
   };
 
-  const handleProcessRequest = (id: number, action: 'process' | 'reject') => {
-    setManagerRequests(managerRequests.map(req => 
-      req.id === id ? { ...req, status: action === 'process' ? 'processed' : 'rejected' as const } : req
-    ));
-    toast.success(action === 'process' ? 'Demande traitée' : 'Demande rejetée');
-  };
 
   const filteredEmployees = employees.filter(emp => {
     const matchesService = filterService === 'all' || emp.service === filterService;
@@ -514,15 +664,15 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                       <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                         <Input
-                          placeholder="Rechercher..."
-                          value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
+                          placeholder="Rechercher par matricule, nom, prénom, poste..."
+                          value={reportingSearchTerm}
+                          onChange={(e) => setReportingSearchTerm(e.target.value)}
                           className="pl-10"
                         />
                       </div>
                     </div>
 
-                    <Select value={filterDivision} onValueChange={setFilterDivision}>
+                    <Select value={reportingFilterDivision} onValueChange={setReportingFilterDivision}>
                       <SelectTrigger className="w-48">
                         <SelectValue placeholder="Division" />
                       </SelectTrigger>
@@ -531,63 +681,311 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                         <SelectItem value="Production">Production</SelectItem>
                         <SelectItem value="Qualité">Qualité</SelectItem>
                         <SelectItem value="Logistique">Logistique</SelectItem>
+                        <SelectItem value="Administration">Administration</SelectItem>
+                        <SelectItem value="Maintenance">Maintenance</SelectItem>
                       </SelectContent>
                     </Select>
 
-                    <Select value={filterStatus} onValueChange={setFilterStatus}>
+                    <Select value={reportingFilterStatus} onValueChange={setReportingFilterStatus}>
                       <SelectTrigger className="w-48">
                         <SelectValue placeholder="Statut" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">Tous les statuts</SelectItem>
-                        <SelectItem value="pending">En attente</SelectItem>
-                        <SelectItem value="validated">Validé</SelectItem>
-                        <SelectItem value="rejected">Rejeté</SelectItem>
+                        <SelectItem value="soumis">Soumis</SelectItem>
+                        <SelectItem value="valide">Validé</SelectItem>
+                        <SelectItem value="rejete">Rejeté</SelectItem>
                       </SelectContent>
                     </Select>
+
+                    {uniqueGestionnaires.length > 0 && (
+                      <Select value={reportingFilterGestionnaire} onValueChange={setReportingFilterGestionnaire}>
+                        <SelectTrigger className="w-48">
+                          <SelectValue placeholder="Gestionnaire" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous les gestionnaires</SelectItem>
+                          {uniqueGestionnaires.map((gestionnaire) => (
+                            <SelectItem key={gestionnaire} value={gestionnaire}>
+                              {gestionnaire}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                 </CardContent>
               </Card>
 
               <Card className="border-slate-200">
                 <CardHeader>
-                  <CardTitle>Tableau complet de suivi</CardTitle>
+                  <CardTitle>Historique des soumissions EVP</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Employé</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Type</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Validé par</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredRecords.map((record) => (
-                          <tr key={record.id} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-3 px-4">
-                              <Badge variant="outline" className="border-emerald-200 text-emerald-700">
-                                {record.matricule}
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-4 text-sm text-slate-900">{record.employee}</td>
-                            <td className="py-3 px-4 text-sm text-slate-700">{record.division}</td>
-                            <td className="py-3 px-4 text-sm text-slate-700">{record.type}</td>
-                            <td className="py-3 px-4 text-sm text-slate-900">{record.amount}</td>
-                            <td className="py-3 px-4 text-sm text-slate-600">{record.submittedDate}</td>
-                            <td className="py-3 px-4 text-sm text-slate-600">{record.validatedBy || '-'}</td>
-                            <td className="py-3 px-4">{getStatusBadge(record.status)}</td>
+                  {loadingHistorical ? (
+                    <div className="text-center py-8 text-slate-500">Chargement de l'historique...</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Type EVP</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Prime (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Indemnité (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Durée Congé</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Soumis</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Service</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {filteredHistoricalSubmissions.length === 0 ? (
+                            <tr>
+                              <td colSpan={11} className="text-center py-8 text-slate-500">
+                                Aucune soumission trouvée
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredHistoricalSubmissions.map((sub) => {
+                              const employee = sub.employee;
+                              const nomComplet = employee.prenom ? `${employee.prenom} ${employee.nom}` : employee.nom;
+                              
+                              // Type EVP - deux lignes empilées
+                              const typeEVPItems = [];
+                              if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
+                              if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+
+                              const montantPrime = sub.prime?.montantCalcule 
+                                ? (typeof sub.prime.montantCalcule === 'string' 
+                                    ? parseFloat(sub.prime.montantCalcule) 
+                                    : sub.prime.montantCalcule).toFixed(2)
+                                : '-';
+                              
+                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                                ? (typeof sub.conge.indemniteCalculee === 'string' 
+                                    ? parseFloat(sub.conge.indemniteCalculee) 
+                                    : sub.conge.indemniteCalculee).toFixed(2)
+                                : '-';
+
+                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+
+                              // Dates de soumission - deux lignes empilées
+                              const formatDate = (dateStr: string | undefined) => {
+                                if (!dateStr) return null;
+                                return new Date(dateStr).toLocaleDateString('fr-FR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric'
+                                });
+                              };
+                              const datePrime = formatDate(sub.prime?.submittedAt);
+                              const dateConge = formatDate(sub.conge?.submittedAt);
+
+                              // Déterminer les réponses Service et Division pour Prime
+                              const getPrimeServiceResponse = () => {
+                                if (!sub.prime) return null;
+                                const statut = sub.prime.statut || 'En attente';
+                                if (statut === 'Rejeté') return 'Rejetée';
+                                if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                                return 'En attente';
+                              };
+
+                              const getPrimeDivisionResponse = () => {
+                                if (!sub.prime) return null;
+                                const statut = sub.prime.statut || 'En attente';
+                                // Si rejeté par le service, ne pas afficher de statut Division (laisser vide)
+                                if (statut === 'Rejeté') return null;
+                                if (statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                                if (statut === 'Validé Service') return 'En attente'; // Pas encore validé par division
+                                return 'En attente';
+                              };
+
+                              // Déterminer les réponses Service et Division pour Congé
+                              const getCongeServiceResponse = () => {
+                                if (!sub.conge) return null;
+                                const statut = sub.conge.statut || 'En attente';
+                                if (statut === 'Rejeté') return 'Rejetée';
+                                if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                                return 'En attente';
+                              };
+
+                              const getCongeDivisionResponse = () => {
+                                if (!sub.conge) return null;
+                                const statut = sub.conge.statut || 'En attente';
+                                // Si rejeté par le service, ne pas afficher de statut Division (laisser vide)
+                                if (statut === 'Rejeté') return null;
+                                if (statut === 'Validé Division' || statut === 'Validé') return 'Validée';
+                                if (statut === 'Validé Service') return 'En attente'; // Pas encore validé par division
+                                return 'En attente';
+                              };
+
+                              return (
+                                <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                  <td className="py-3 px-4">
+                                    <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                                      {employee.matricule}
+                                    </Badge>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{nomComplet}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{employee.poste || '-'}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {typeEVPItems.map((type, idx) => (
+                                        <Badge 
+                                          key={idx}
+                                          className={type === 'Prime' 
+                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-blue-50 text-blue-700 border border-blue-200'}
+                                        >
+                                          {type}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantPrime !== '-' ? `${montantPrime} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantIndemnite !== '-' ? `${montantIndemnite} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{dureeConge}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1 text-sm text-slate-600">
+                                      {datePrime && (
+                                        <div>{datePrime}</div>
+                                      )}
+                                      {dateConge && (
+                                        <div>{dateConge}</div>
+                                      )}
+                                      {!datePrime && !dateConge && <span>-</span>}
+                                    </div>
+                                  </td>
+                                  {/* Colonne Soumis */}
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {sub.isPrime && sub.prime && (
+                                        <div className="mb-1">
+                                          {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
+                                          {sub.prime.submittedAt && (sub.prime.statut === 'Soumis' || sub.prime.commentaire) && (
+                                            <div className="flex flex-col gap-1">
+                                              <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-xs">Modifié</Badge>
+                                              <span className="text-xs text-slate-500">
+                                                {new Date(sub.prime.submittedAt).toLocaleDateString('fr-FR', {
+                                                  day: '2-digit',
+                                                  month: '2-digit',
+                                                  year: 'numeric'
+                                                })}
+                                              </span>
+                                            </div>
+                                          )}
+                                          {/* Sinon, afficher "Oui" si soumis */}
+                                          {(!sub.prime.submittedAt || (sub.prime.statut !== 'Soumis' && !sub.prime.commentaire)) && (
+                                            <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-xs">Oui</Badge>
+                                          )}
+                                        </div>
+                                      )}
+                                      {sub.isConge && sub.conge && (
+                                        <div>
+                                          {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
+                                          {sub.conge.submittedAt && (sub.conge.statut === 'Soumis' || sub.conge.commentaire) && (
+                                            <div className="flex flex-col gap-1">
+                                              <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-xs">Modifié</Badge>
+                                              <span className="text-xs text-slate-500">
+                                                {new Date(sub.conge.submittedAt).toLocaleDateString('fr-FR', {
+                                                  day: '2-digit',
+                                                  month: '2-digit',
+                                                  year: 'numeric'
+                                                })}
+                                              </span>
+                                            </div>
+                                          )}
+                                          {/* Sinon, afficher "Oui" si soumis */}
+                                          {(!sub.conge.submittedAt || (sub.conge.statut !== 'Soumis' && !sub.conge.commentaire)) && (
+                                            <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-xs">Oui</Badge>
+                                          )}
+                                        </div>
+                                      )}
+                                      {!sub.isPrime && !sub.isConge && (
+                                        <span className="text-slate-400 text-xs">-</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  {/* Colonne Service */}
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {sub.isPrime && sub.prime && (
+                                        <div className="mb-1">
+                                          {getPrimeServiceResponse() === 'Validée' && (
+                                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                          )}
+                                          {getPrimeServiceResponse() === 'Rejetée' && (
+                                            <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">Rejetée</Badge>
+                                          )}
+                                          {getPrimeServiceResponse() === 'En attente' && (
+                                            <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                          )}
+                                        </div>
+                                      )}
+                                      {sub.isConge && sub.conge && (
+                                        <div>
+                                          {getCongeServiceResponse() === 'Validée' && (
+                                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                          )}
+                                          {getCongeServiceResponse() === 'Rejetée' && (
+                                            <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">Rejetée</Badge>
+                                          )}
+                                          {getCongeServiceResponse() === 'En attente' && (
+                                            <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                          )}
+                                        </div>
+                                      )}
+                                      {!sub.isPrime && !sub.isConge && (
+                                        <span className="text-slate-400 text-xs">-</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  {/* Colonne Division */}
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {sub.isPrime && sub.prime && (
+                                        <div className="mb-1">
+                                          {getPrimeDivisionResponse() === 'Validée' && (
+                                            <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                          )}
+                                          {getPrimeDivisionResponse() === 'En attente' && (
+                                            <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                          )}
+                                          {getPrimeDivisionResponse() === null && (
+                                            <span className="text-slate-400 text-xs">-</span>
+                                          )}
+                                        </div>
+                                      )}
+                                      {sub.isConge && sub.conge && (
+                                        <div>
+                                        {getCongeDivisionResponse() === 'Validée' && (
+                                          <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
+                                        )}
+                                        {getCongeDivisionResponse() === 'En attente' && (
+                                          <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">En attente</Badge>
+                                        )}
+                                        {getCongeDivisionResponse() === null && (
+                                          <span className="text-slate-400 text-xs">-</span>
+                                        )}
+                                        </div>
+                                      )}
+                                      {!sub.isPrime && !sub.isConge && (
+                                        <span className="text-slate-400 text-xs">-</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -773,71 +1171,92 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
 
               <Card className="border-slate-200">
                 <CardHeader>
-                  <CardTitle>Liste des demandes en attente</CardTitle>
+                  <CardTitle>Liste des demandes</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto">
+                  {loadingRequests ? (
+                    <div className="text-center py-8 text-slate-500">Chargement des demandes...</div>
+                  ) : (
+                    <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead>
                         <tr className="border-b-2 border-slate-200">
                           <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Nom et Prénom</th>
+                          <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                          <th className="text-left py-3 px-4 text-sm text-slate-600">Prénom</th>
                           <th className="text-left py-3 px-4 text-sm text-slate-600">Raison</th>
                           <th className="text-left py-3 px-4 text-sm text-slate-600">Demandé par</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Date</th>
+                          <th className="text-left py-3 px-4 text-sm text-slate-600">Date de demande</th>
                           <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
                           <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {managerRequests.map((request) => (
-                          <tr key={request.id} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-3 px-4">
-                              <Badge variant="outline" className="border-blue-200 text-blue-700">
-                                {request.matricule}
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-4 text-sm text-slate-900">{request.nomPrenom}</td>
-                            <td className="py-3 px-4 text-sm text-slate-700">{request.raison}</td>
-                            <td className="py-3 px-4 text-sm text-slate-700">{request.requestedBy}</td>
-                            <td className="py-3 px-4 text-sm text-slate-600">{request.requestDate}</td>
-                            <td className="py-3 px-4">
-                              {request.status === 'pending' && (
-                                <Badge className="bg-orange-100 text-orange-700 border-orange-200">En attente</Badge>
-                              )}
-                              {request.status === 'processed' && (
-                                <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Traité</Badge>
-                              )}
-                              {request.status === 'rejected' && (
-                                <Badge className="bg-red-100 text-red-700 border-red-200">Rejeté</Badge>
-                              )}
-                            </td>
-                            <td className="py-3 px-4">
-                              {request.status === 'pending' && (
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleProcessRequest(request.id, 'process')}
-                                    className="bg-emerald-600 hover:bg-emerald-700 h-8"
-                                  >
-                                    Traiter
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleProcessRequest(request.id, 'reject')}
-                                    className="border-red-200 text-red-600 hover:bg-red-50 h-8"
-                                  >
-                                    Rejeter
-                                  </Button>
-                                </div>
-                              )}
+                        {managerRequests.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="text-center py-8 text-slate-500">
+                              Aucune demande pour le moment
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          managerRequests.map((request) => {
+                            const requestDate = new Date(request.requestDate).toLocaleDateString('fr-FR', {
+                              day: '2-digit',
+                              month: '2-digit',
+                              year: 'numeric'
+                            });
+                            return (
+                              <tr key={request.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                <td className="py-3 px-4">
+                                  <Badge variant="outline" className="border-blue-200 text-blue-700">
+                                    {request.matricule}
+                                  </Badge>
+                                </td>
+                                <td className="py-3 px-4 text-sm text-slate-900">{request.nom}</td>
+                                <td className="py-3 px-4 text-sm text-slate-900">{request.prenom}</td>
+                                <td className="py-3 px-4 text-sm text-slate-700">{request.raison}</td>
+                                <td className="py-3 px-4 text-sm text-slate-700">{request.requestedBy?.name || 'N/A'}</td>
+                                <td className="py-3 px-4 text-sm text-slate-600">{requestDate}</td>
+                                <td className="py-3 px-4">
+                                  {request.statut === 'En attente' && (
+                                    <Badge className="bg-orange-100 text-orange-700 border-orange-200">En attente</Badge>
+                                  )}
+                                  {request.statut === 'Traité' && (
+                                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">Traité</Badge>
+                                  )}
+                                  {request.statut === 'Rejeté' && (
+                                    <Badge className="bg-red-100 text-red-700 border-red-200">Rejeté</Badge>
+                                  )}
+                                </td>
+                                <td className="py-3 px-4">
+                                  {request.statut === 'En attente' && (
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleProcessRequest(request.id, 'approve')}
+                                        className="bg-emerald-600 hover:bg-emerald-700 h-8"
+                                      >
+                                        Ajouter
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => handleProcessRequest(request.id, 'reject')}
+                                        className="border-red-200 text-red-600 hover:bg-red-50 h-8"
+                                      >
+                                        Rejeter
+                                      </Button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -1050,6 +1469,254 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                   Ajouter l'employé
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog pour compléter les informations lors de l'approbation d'une demande */}
+      <Dialog open={showApproveDialog} onOpenChange={(open) => {
+        setShowApproveDialog(open);
+        if (!open) {
+          setSelectedRequest(null);
+          setApproveForm({ poste: '', service: '', division: '' });
+        }
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Compléter les informations de l'employé</DialogTitle>
+            <DialogDescription>
+              Ajoutez les informations manquantes pour créer l'employé dans le système
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedRequest && (
+            <div className="space-y-4 py-4">
+              <div className="p-4 bg-slate-50 rounded-xl">
+                <p className="text-sm text-slate-600 mb-2">Informations de la demande :</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-slate-500">Matricule :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.matricule}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Nom :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.nom}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Prénom :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.prenom}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Raison :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.raison}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm text-slate-700">Poste *</label>
+                  <Select
+                    value={approveForm.poste}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, poste: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un poste" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="technicien">Technicien</SelectItem>
+                      <SelectItem value="agent de maîtrise">Agent de maîtrise</SelectItem>
+                      <SelectItem value="cadre administratif">Cadre administratif</SelectItem>
+                      <SelectItem value="cadre supérieur">Cadre supérieur</SelectItem>
+                      <SelectItem value="ouvrier">Ouvrier</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm text-slate-700">Service *</label>
+                  <Select
+                    value={approveForm.service}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, service: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un service" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Maintenance">Maintenance</SelectItem>
+                      <SelectItem value="Fabrication">Fabrication</SelectItem>
+                      <SelectItem value="Administration">Administration</SelectItem>
+                      <SelectItem value="Contrôle">Contrôle</SelectItem>
+                      <SelectItem value="Expédition">Expédition</SelectItem>
+                      <SelectItem value="Logistique">Logistique</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm text-slate-700">Division *</label>
+                  <Select
+                    value={approveForm.division}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, division: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner une division" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Production">Production</SelectItem>
+                      <SelectItem value="Qualité">Qualité</SelectItem>
+                      <SelectItem value="Logistique">Logistique</SelectItem>
+                      <SelectItem value="Administration">Administration</SelectItem>
+                      <SelectItem value="Maintenance">Maintenance</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowApproveDialog(false);
+                setSelectedRequest(null);
+                setApproveForm({ poste: '', service: '', division: '' });
+              }}
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={handleApproveWithDetails}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              <UserPlus className="w-4 h-4 mr-2" />
+              Confirmer et créer l'employé
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog pour compléter les informations lors de l'approbation d'une demande */}
+      <Dialog open={showApproveDialog} onOpenChange={(open) => {
+        setShowApproveDialog(open);
+        if (!open) {
+          setSelectedRequest(null);
+          setApproveForm({ poste: '', service: '', division: '' });
+        }
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Compléter les informations de l'employé</DialogTitle>
+            <DialogDescription>
+              Ajoutez les informations manquantes pour créer l'employé dans le système
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedRequest && (
+            <div className="space-y-4 py-4">
+              <div className="p-4 bg-slate-50 rounded-xl">
+                <p className="text-sm text-slate-600 mb-2">Informations de la demande :</p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-slate-500">Matricule :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.matricule}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Nom :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.nom}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Prénom :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.prenom}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Raison :</span>
+                    <span className="ml-2 font-semibold text-slate-900">{selectedRequest.raison}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm text-slate-700">Poste *</label>
+                  <Select
+                    value={approveForm.poste}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, poste: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un poste" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="technicien">Technicien</SelectItem>
+                      <SelectItem value="agent de maîtrise">Agent de maîtrise</SelectItem>
+                      <SelectItem value="cadre administratif">Cadre administratif</SelectItem>
+                      <SelectItem value="cadre supérieur">Cadre supérieur</SelectItem>
+                      <SelectItem value="ouvrier">Ouvrier</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm text-slate-700">Service *</label>
+                  <Select
+                    value={approveForm.service}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, service: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un service" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Maintenance">Maintenance</SelectItem>
+                      <SelectItem value="Fabrication">Fabrication</SelectItem>
+                      <SelectItem value="Administration">Administration</SelectItem>
+                      <SelectItem value="Contrôle">Contrôle</SelectItem>
+                      <SelectItem value="Expédition">Expédition</SelectItem>
+                      <SelectItem value="Logistique">Logistique</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm text-slate-700">Division *</label>
+                  <Select
+                    value={approveForm.division}
+                    onValueChange={(value) => setApproveForm({ ...approveForm, division: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner une division" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Production">Production</SelectItem>
+                      <SelectItem value="Qualité">Qualité</SelectItem>
+                      <SelectItem value="Logistique">Logistique</SelectItem>
+                      <SelectItem value="Administration">Administration</SelectItem>
+                      <SelectItem value="Maintenance">Maintenance</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowApproveDialog(false);
+                setSelectedRequest(null);
+                setApproveForm({ poste: '', service: '', division: '' });
+              }}
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={handleApproveWithDetails}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              <UserPlus className="w-4 h-4 mr-2" />
+              Confirmer et créer l'employé
             </Button>
           </DialogFooter>
         </DialogContent>

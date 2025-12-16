@@ -29,50 +29,21 @@ class EVPSubmission
     #[Groups(['evp:read'])]
     private ?User $submittedBy = null;
 
-    #[ORM\Column(type: 'string', length: 50)]
+    // Colonnes booléennes pour indiquer le type de soumission
+    #[ORM\Column(type: 'boolean', options: ['default' => false])]
     #[Groups(['evp:read'])]
-    private ?string $type = null; // 'Prime', 'Congé', 'Heures Sup', 'Absence'
+    private bool $isPrime = false;
 
-    // Champs pour Prime
-    #[ORM\Column(type: 'decimal', precision: 10, scale: 2, nullable: true)]
-    private ?string $tauxMonetaire = null;
+    #[ORM\Column(type: 'boolean', options: ['default' => false])]
+    #[Groups(['evp:read'])]
+    private bool $isConge = false;
 
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $groupe = null;
+    // Relations avec les entités détaillées
+    #[ORM\OneToOne(targetEntity: Prime::class, mappedBy: 'evpSubmission', cascade: ['persist', 'remove'])]
+    private ?Prime $prime = null;
 
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $nombrePostes = null;
-
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $scoreEquipe = null;
-
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $noteHierarchique = null;
-
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $scoreCollectif = null;
-
-    // Champs pour Congé
-    #[ORM\Column(type: 'date', nullable: true)]
-    private ?\DateTimeInterface $dateDebut = null;
-
-    #[ORM\Column(type: 'date', nullable: true)]
-    private ?\DateTimeInterface $dateFin = null;
-
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $nombreJours = null;
-
-    #[ORM\Column(type: 'integer', nullable: true)]
-    private ?int $tranche = null;
-
-    #[ORM\Column(type: 'boolean', nullable: true)]
-    private ?bool $avanceSurConge = null;
-
-    #[ORM\Column(type: 'decimal', precision: 10, scale: 2, nullable: true)]
-    private ?string $montantAvance = null;
-
-    #[ORM\Column(type: 'decimal', precision: 10, scale: 2, nullable: true)]
-    private ?string $indemniteForfaitaire = null;
+    #[ORM\OneToOne(targetEntity: Conge::class, mappedBy: 'evpSubmission', cascade: ['persist', 'remove'])]
+    private ?Conge $conge = null;
 
     // Montants calculés
     #[ORM\Column(type: 'decimal', precision: 10, scale: 2)]
@@ -83,35 +54,26 @@ class EVPSubmission
     #[Groups(['evp:read'])]
     private ?string $indemniteCalculee = null;
 
-    // Statut et validation
-    #[ORM\Column(type: 'string', length: 50)]
+    // Validation par niveau
+    #[ORM\Column(type: 'boolean', options: ['default' => false])]
     #[Groups(['evp:read'])]
-    private ?string $statut = null; // 'En attente', 'Validé Service', 'Validé Division', 'Approuvé RH', 'Rejeté'
-
-    #[ORM\Column(type: 'string', length: 255, nullable: true)]
-    private ?string $justificatifPath = null;
+    private bool $valideService = false;
 
     #[ORM\Column(type: 'boolean', options: ['default' => false])]
-    private bool $hasJustificatif = false;
+    #[Groups(['evp:read'])]
+    private bool $valideDivision = false;
 
     #[ORM\OneToMany(mappedBy: 'evpSubmission', targetEntity: ValidationHistory::class, cascade: ['persist', 'remove'])]
     private Collection $validationHistories;
 
-    #[ORM\Column(type: 'datetime_immutable')]
-    #[Groups(['evp:read'])]
-    private ?\DateTimeImmutable $submittedAt = null;
-
-    #[ORM\Column(type: 'datetime_immutable', nullable: true)]
-    private ?\DateTimeImmutable $validatedAt = null;
-
-    #[ORM\Column(type: Types::TEXT, nullable: true)]
-    private ?string $commentaire = null;
-
     public function __construct()
     {
         $this->validationHistories = new ArrayCollection();
-        $this->submittedAt = new \DateTimeImmutable();
-        $this->statut = 'En attente';
+        $this->montantCalcule = '0.00';
+        $this->isPrime = false;
+        $this->isConge = false;
+        $this->valideService = false;
+        $this->valideDivision = false;
     }
 
     public function getId(): ?int
@@ -141,159 +103,28 @@ class EVPSubmission
         return $this;
     }
 
-    public function getType(): ?string
+    public function isPrime(): bool
     {
-        return $this->type;
+        return $this->isPrime;
     }
 
-    public function setType(string $type): self
+    public function setIsPrime(bool $isPrime): self
     {
-        $this->type = $type;
+        $this->isPrime = $isPrime;
         return $this;
     }
 
-    public function getTauxMonetaire(): ?string
+    public function isConge(): bool
     {
-        return $this->tauxMonetaire;
+        return $this->isConge;
     }
 
-    public function setTauxMonetaire(?string $tauxMonetaire): self
+    public function setIsConge(bool $isConge): self
     {
-        $this->tauxMonetaire = $tauxMonetaire;
+        $this->isConge = $isConge;
         return $this;
     }
 
-    public function getGroupe(): ?int
-    {
-        return $this->groupe;
-    }
-
-    public function setGroupe(?int $groupe): self
-    {
-        $this->groupe = $groupe;
-        return $this;
-    }
-
-    public function getNombrePostes(): ?int
-    {
-        return $this->nombrePostes;
-    }
-
-    public function setNombrePostes(?int $nombrePostes): self
-    {
-        $this->nombrePostes = $nombrePostes;
-        return $this;
-    }
-
-    public function getScoreEquipe(): ?int
-    {
-        return $this->scoreEquipe;
-    }
-
-    public function setScoreEquipe(?int $scoreEquipe): self
-    {
-        $this->scoreEquipe = $scoreEquipe;
-        return $this;
-    }
-
-    public function getNoteHierarchique(): ?int
-    {
-        return $this->noteHierarchique;
-    }
-
-    public function setNoteHierarchique(?int $noteHierarchique): self
-    {
-        $this->noteHierarchique = $noteHierarchique;
-        return $this;
-    }
-
-    public function getScoreCollectif(): ?int
-    {
-        return $this->scoreCollectif;
-    }
-
-    public function setScoreCollectif(?int $scoreCollectif): self
-    {
-        $this->scoreCollectif = $scoreCollectif;
-        return $this;
-    }
-
-    public function getDateDebut(): ?\DateTimeInterface
-    {
-        return $this->dateDebut;
-    }
-
-    public function setDateDebut(?\DateTimeInterface $dateDebut): self
-    {
-        $this->dateDebut = $dateDebut;
-        return $this;
-    }
-
-    public function getDateFin(): ?\DateTimeInterface
-    {
-        return $this->dateFin;
-    }
-
-    public function setDateFin(?\DateTimeInterface $dateFin): self
-    {
-        $this->dateFin = $dateFin;
-        return $this;
-    }
-
-    public function getNombreJours(): ?int
-    {
-        return $this->nombreJours;
-    }
-
-    public function setNombreJours(?int $nombreJours): self
-    {
-        $this->nombreJours = $nombreJours;
-        return $this;
-    }
-
-    public function getTranche(): ?int
-    {
-        return $this->tranche;
-    }
-
-    public function setTranche(?int $tranche): self
-    {
-        $this->tranche = $tranche;
-        return $this;
-    }
-
-    public function isAvanceSurConge(): ?bool
-    {
-        return $this->avanceSurConge;
-    }
-
-    public function setAvanceSurConge(?bool $avanceSurConge): self
-    {
-        $this->avanceSurConge = $avanceSurConge;
-        return $this;
-    }
-
-    public function getMontantAvance(): ?string
-    {
-        return $this->montantAvance;
-    }
-
-    public function setMontantAvance(?string $montantAvance): self
-    {
-        $this->montantAvance = $montantAvance;
-        return $this;
-    }
-
-    public function getIndemniteForfaitaire(): ?string
-    {
-        return $this->indemniteForfaitaire;
-    }
-
-    public function setIndemniteForfaitaire(?string $indemniteForfaitaire): self
-    {
-        $this->indemniteForfaitaire = $indemniteForfaitaire;
-        return $this;
-    }
 
     public function getMontantCalcule(): ?string
     {
@@ -317,36 +148,25 @@ class EVPSubmission
         return $this;
     }
 
-    public function getStatut(): ?string
+    public function isValideService(): bool
     {
-        return $this->statut;
+        return $this->valideService;
     }
 
-    public function setStatut(string $statut): self
+    public function setValideService(bool $valideService): self
     {
-        $this->statut = $statut;
+        $this->valideService = $valideService;
         return $this;
     }
 
-    public function getJustificatifPath(): ?string
+    public function isValideDivision(): bool
     {
-        return $this->justificatifPath;
+        return $this->valideDivision;
     }
 
-    public function setJustificatifPath(?string $justificatifPath): self
+    public function setValideDivision(bool $valideDivision): self
     {
-        $this->justificatifPath = $justificatifPath;
-        return $this;
-    }
-
-    public function isHasJustificatif(): bool
-    {
-        return $this->hasJustificatif;
-    }
-
-    public function setHasJustificatif(bool $hasJustificatif): self
-    {
-        $this->hasJustificatif = $hasJustificatif;
+        $this->valideDivision = $valideDivision;
         return $this;
     }
 
@@ -379,36 +199,45 @@ class EVPSubmission
         return $this;
     }
 
-    public function getSubmittedAt(): ?\DateTimeImmutable
+    // Relations avec Prime et Conge
+
+    public function getPrime(): ?Prime
     {
-        return $this->submittedAt;
+        return $this->prime;
     }
 
-    public function setSubmittedAt(\DateTimeImmutable $submittedAt): self
+    public function setPrime(?Prime $prime): self
     {
-        $this->submittedAt = $submittedAt;
+        // Définir la relation bidirectionnelle
+        if ($prime === null && $this->prime !== null) {
+            $this->prime->setEvpSubmission(null);
+        }
+
+        if ($prime !== null && $prime->getEvpSubmission() !== $this) {
+            $prime->setEvpSubmission($this);
+        }
+
+        $this->prime = $prime;
         return $this;
     }
 
-    public function getValidatedAt(): ?\DateTimeImmutable
+    public function getConge(): ?Conge
     {
-        return $this->validatedAt;
+        return $this->conge;
     }
 
-    public function setValidatedAt(?\DateTimeImmutable $validatedAt): self
+    public function setConge(?Conge $conge): self
     {
-        $this->validatedAt = $validatedAt;
-        return $this;
-    }
+        // Définir la relation bidirectionnelle
+        if ($conge === null && $this->conge !== null) {
+            $this->conge->setEvpSubmission(null);
+        }
 
-    public function getCommentaire(): ?string
-    {
-        return $this->commentaire;
-    }
+        if ($conge !== null && $conge->getEvpSubmission() !== $this) {
+            $conge->setEvpSubmission($this);
+        }
 
-    public function setCommentaire(?string $commentaire): self
-    {
-        $this->commentaire = $commentaire;
+        $this->conge = $conge;
         return $this;
     }
 }

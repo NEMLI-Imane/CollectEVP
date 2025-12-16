@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { User } from '../App';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -8,7 +8,8 @@ import { Avatar, AvatarFallback } from './ui/avatar';
 import { Textarea } from './ui/textarea';
 import { CheckSquare, CheckCircle2, XCircle, Filter, Search, LogOut, Bell, BarChart3, Menu, Calendar } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
+import { getEVPSubmissions, EVPSubmission, validateEVPSubmission } from '../services/api';
 import {
   Dialog,
   DialogContent,
@@ -51,19 +52,58 @@ interface MonthlyReport {
 
 export default function ResponsableServicePage({ user, onLogout }: ResponsableServicePageProps) {
   const [currentPage, setCurrentPage] = useState<'validation' | 'reporting'>('validation');
-  const [submissions, setSubmissions] = useState<EVPSubmission[]>([
-    { id: 1, employee: 'Khalid Mansouri', matricule: 'OCP012', type: 'Heures supplémentaires', amount: '15h', submittedBy: 'Ahmed Bennani', submittedDate: '2025-10-12', status: 'pending', hasJustificatif: true },
-    { id: 2, employee: 'Nadia El Amrani', matricule: 'OCP034', type: 'Prime de rendement', amount: '2500 DH', submittedBy: 'Ahmed Bennani', submittedDate: '2025-10-12', status: 'pending', hasJustificatif: true },
-    { id: 3, employee: 'Rachid Bousfiha', matricule: 'OCP045', type: 'Absence', amount: '2 jours', submittedBy: 'Ahmed Bennani', submittedDate: '2025-10-11', status: 'pending', hasJustificatif: false },
-    { id: 4, employee: 'Imane Semlali', matricule: 'OCP067', type: 'Congé payé', amount: '5 jours', submittedBy: 'Ahmed Bennani', submittedDate: '2025-10-11', status: 'pending', hasJustificatif: true },
-    { id: 5, employee: 'Youssef Kadiri', matricule: 'OCP089', type: 'Prime exceptionnelle', amount: '3000 DH', submittedBy: 'Ahmed Bennani', submittedDate: '2025-10-10', status: 'validated', hasJustificatif: true },
-  ]);
-
+  const [submissions, setSubmissions] = useState<EVPSubmission[]>([]);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<EVPSubmission | null>(null);
   const [validationDialog, setValidationDialog] = useState<'approve' | 'reject' | null>(null);
   const [comment, setComment] = useState('');
+  const [validationType, setValidationType] = useState<'Prime' | 'Congé' | null>(null);
   const [filterStatus, setFilterStatus] = useState('pending');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Charger les soumissions depuis l'API
+  useEffect(() => {
+    if (currentPage === 'validation') {
+      loadSubmissions();
+    }
+  }, [currentPage]);
+
+  const loadSubmissions = async () => {
+    try {
+      setLoadingSubmissions(true);
+      console.log('📥 Chargement des soumissions EVP pour validation service...');
+      const allSubmissions = await getEVPSubmissions();
+      
+      // Filtrer pour ne garder que les soumissions soumises (statut = "Soumis") et non encore validées par le service
+      // Une soumission reste visible tant qu'au moins un type (Prime ou Congé) est encore "Soumis"
+      const submittedSubmissions = allSubmissions.filter(sub => {
+        const primeStatus = sub.prime?.statut;
+        const congeStatus = sub.conge?.statut;
+        
+        // Vérifier si au moins un type est encore "Soumis" (en attente de validation)
+        const hasPrimePending = sub.isPrime && sub.prime && primeStatus === 'Soumis';
+        const hasCongePending = sub.isConge && sub.conge && congeStatus === 'Soumis';
+        
+        // Garder la soumission si au moins un type est encore "Soumis"
+        return hasPrimePending || hasCongePending;
+      });
+
+      // Trier par date de soumission (les plus récentes en premier)
+      submittedSubmissions.sort((a, b) => {
+        const dateA = a.prime?.submittedAt || a.conge?.submittedAt || '';
+        const dateB = b.prime?.submittedAt || b.conge?.submittedAt || '';
+        return dateB.localeCompare(dateA);
+      });
+
+      console.log('✅ Soumissions chargées:', submittedSubmissions.length);
+      setSubmissions(submittedSubmissions);
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des soumissions:', error);
+      toast.error('Erreur lors du chargement des soumissions: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingSubmissions(false);
+    }
+  };
   
   // Reporting states
   const [selectedMonth, setSelectedMonth] = useState('recent');
@@ -97,30 +137,59 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
     montant: report.montantTotal / 1000,
   }));
 
-  const handleValidation = (submission: EVPSubmission, action: 'approve' | 'reject') => {
+  const handleValidation = (submission: EVPSubmission, action: 'approve' | 'reject', type?: 'Prime' | 'Congé') => {
     setSelectedSubmission(submission);
     setValidationDialog(action);
     setComment('');
+    setValidationType(type || null);
   };
 
-  const confirmValidation = () => {
+  const confirmValidation = async () => {
     if (!selectedSubmission) return;
 
-    const action = validationDialog === 'approve' ? 'validé' : 'rejeté';
-    
-    setSubmissions(submissions.map(sub => 
-      sub.id === selectedSubmission.id 
-        ? { ...sub, status: validationDialog === 'approve' ? 'validated' : 'rejected' as const }
-        : sub
-    ));
+    try {
+      // Si rejet, le commentaire est obligatoire
+      if (validationDialog === 'reject' && !comment.trim()) {
+        toast.error('Veuillez saisir un commentaire pour le rejet');
+        return;
+      }
 
-    toast.success(`EVP ${action} avec succès`, {
-      description: `${selectedSubmission.employee} - ${selectedSubmission.type}`,
-    });
+      console.log('📤 Validation de la soumission:', {
+        submissionId: selectedSubmission.id,
+        action: validationDialog,
+        type: validationType,
+        comment: validationDialog === 'reject' ? comment : undefined
+      });
 
-    setValidationDialog(null);
-    setSelectedSubmission(null);
-    setComment('');
+      await validateEVPSubmission(selectedSubmission.id, validationDialog === 'approve' ? 'approve' : 'reject', {
+        niveau: 'service',
+        commentaire: validationDialog === 'reject' ? comment : undefined,
+        type: validationType || undefined
+      });
+
+      const actionText = validationDialog === 'approve' ? 'validé' : 'rejeté';
+      const employee = selectedSubmission.employee;
+      const employeeName = employee?.prenom 
+        ? `${employee.prenom} ${employee.nom}`
+        : employee?.nom || 'Employé';
+      const typeText = validationType ? ` (${validationType})` : '';
+      
+      toast.success(`EVP ${actionText} avec succès${typeText}`, {
+        description: `${employeeName}`,
+      });
+
+      setValidationDialog(null);
+      setSelectedSubmission(null);
+      setComment('');
+      setValidationType(null);
+
+      // Recharger les soumissions
+      await loadSubmissions();
+    } catch (error) {
+      console.error('❌ Erreur lors de la validation:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la validation: ${errorMessage}`);
+    }
   };
 
   const getInitials = (name: string) => {
@@ -133,17 +202,25 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
   };
 
   const filteredSubmissions = submissions.filter(sub => {
-    const matchesStatus = filterStatus === 'all' || sub.status === filterStatus;
-    const matchesSearch = sub.employee.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         sub.matricule.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesStatus && matchesSearch;
+    const employee = sub.employee;
+    if (!employee) return false;
+
+    // Filtre par recherche (matricule, nom, prénom, poste)
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = !searchTerm || 
+      employee.matricule?.toLowerCase().includes(searchLower) ||
+      employee.nom?.toLowerCase().includes(searchLower) ||
+      employee.prenom?.toLowerCase().includes(searchLower) ||
+      employee.poste?.toLowerCase().includes(searchLower);
+
+    return matchesSearch;
   });
 
   const filteredReports = selectedMonth === 'recent' ? monthlyReports.slice(0, 3) : monthlyReports;
 
-  const pendingCount = submissions.filter(s => s.status === 'pending').length;
-  const validatedCount = submissions.filter(s => s.status === 'validated').length;
-  const rejectedCount = submissions.filter(s => s.status === 'rejected').length;
+  const pendingCount = submissions.length; // Toutes les soumissions affichées sont en attente
+  const validatedCount = 0; // Pas de soumissions validées dans cette vue
+  const rejectedCount = 0; // Pas de soumissions rejetées dans cette vue
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -366,67 +443,165 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                   <CardTitle>EVP soumis par les gestionnaires</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Employé</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Type d'élément</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant/Durée</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Date</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredSubmissions.map((submission) => (
-                          <tr key={submission.id} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-3 px-4">
-                              <Badge variant="outline" className="border-emerald-200 text-emerald-700">
-                                {submission.matricule}
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-4">
-                              <div>
-                                <p className="text-sm text-slate-900">{submission.employee}</p>
-                                {submission.hasJustificatif && (
-                                  <p className="text-xs text-emerald-600">📎 Justificatif</p>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-3 px-4 text-sm text-slate-700">{submission.type}</td>
-                            <td className="py-3 px-4 text-sm text-slate-900">{submission.amount}</td>
-                            <td className="py-3 px-4 text-sm text-slate-600">{submission.submittedDate}</td>
-                            <td className="py-3 px-4">{getStatusBadge(submission.status)}</td>
-                            <td className="py-3 px-4">
-                              {submission.status === 'pending' && (
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleValidation(submission, 'approve')}
-                                    className="bg-emerald-600 hover:bg-emerald-700 h-8"
-                                  >
-                                    <CheckCircle2 className="w-3 h-3 mr-1" />
-                                    Valider
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleValidation(submission, 'reject')}
-                                    className="border-red-200 text-red-600 hover:bg-red-50 h-8"
-                                  >
-                                    <XCircle className="w-3 h-3 mr-1" />
-                                    Rejeter
-                                  </Button>
-                                </div>
-                              )}
-                            </td>
+                  {loadingSubmissions ? (
+                    <div className="text-center py-8 text-slate-500">Chargement des soumissions...</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Type EVP</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Prime (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Indemnité (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Durée Congé</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {filteredSubmissions.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} className="text-center py-8 text-slate-500">
+                                Aucune soumission en attente de validation
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredSubmissions.map((sub) => {
+                              const employee = sub.employee;
+                              const nomComplet = employee?.prenom ? `${employee.prenom} ${employee.nom}` : employee?.nom || '-';
+                              
+                              // Type EVP - deux lignes empilées
+                              const typeEVPItems = [];
+                              if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
+                              if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+
+                              const montantPrime = sub.prime?.montantCalcule 
+                                ? (typeof sub.prime.montantCalcule === 'string' 
+                                    ? parseFloat(sub.prime.montantCalcule) 
+                                    : sub.prime.montantCalcule).toFixed(2)
+                                : '-';
+                              
+                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                                ? (typeof sub.conge.indemniteCalculee === 'string' 
+                                    ? parseFloat(sub.conge.indemniteCalculee) 
+                                    : sub.conge.indemniteCalculee).toFixed(2)
+                                : '-';
+
+                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+
+                              // Dates de soumission - deux lignes empilées
+                              const formatDate = (dateStr: string | undefined) => {
+                                if (!dateStr) return null;
+                                return new Date(dateStr).toLocaleDateString('fr-FR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric'
+                                });
+                              };
+                              const datePrime = formatDate(sub.prime?.submittedAt);
+                              const dateConge = formatDate(sub.conge?.submittedAt);
+
+                              return (
+                                <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                  <td className="py-3 px-4">
+                                    <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                                      {employee?.matricule || '-'}
+                                    </Badge>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{nomComplet}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{employee?.poste || '-'}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {typeEVPItems.map((type, idx) => (
+                                        <Badge 
+                                          key={idx}
+                                          className={type === 'Prime' 
+                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-blue-50 text-blue-700 border border-blue-200'}
+                                        >
+                                          {type}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantPrime !== '-' ? `${montantPrime} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantIndemnite !== '-' ? `${montantIndemnite} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{dureeConge}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1 text-sm text-slate-600">
+                                      {datePrime && (
+                                        <div>{datePrime}</div>
+                                      )}
+                                      {dateConge && (
+                                        <div>{dateConge}</div>
+                                      )}
+                                      {!datePrime && !dateConge && <span>-</span>}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-2">
+                                      {/* Actions pour Prime - afficher seulement si statut est "Soumis" */}
+                                      {sub.isPrime && sub.prime && sub.prime.statut === 'Soumis' && (
+                                        <div className="flex gap-2 mb-1">
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleValidation(sub, 'approve', 'Prime')}
+                                            className="bg-emerald-600 hover:bg-emerald-700 h-8 text-xs"
+                                          >
+                                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                                            Valider
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => handleValidation(sub, 'reject', 'Prime')}
+                                            className="border-red-200 text-red-600 hover:bg-red-50 h-8 text-xs"
+                                          >
+                                            <XCircle className="w-3 h-3 mr-1" />
+                                            Rejeter
+                                          </Button>
+                                        </div>
+                                      )}
+                                      {/* Actions pour Congé - afficher seulement si statut est "Soumis" */}
+                                      {sub.isConge && sub.conge && sub.conge.statut === 'Soumis' && (
+                                        <div className="flex gap-2">
+                                          <Button
+                                            size="sm"
+                                            onClick={() => handleValidation(sub, 'approve', 'Congé')}
+                                            className="bg-emerald-600 hover:bg-emerald-700 h-8 text-xs"
+                                          >
+                                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                                            Valider
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => handleValidation(sub, 'reject', 'Congé')}
+                                            className="border-red-200 text-red-600 hover:bg-red-50 h-8 text-xs"
+                                          >
+                                            <XCircle className="w-3 h-3 mr-1" />
+                                            Rejeter
+                                          </Button>
+                                        </div>
+                                      )}
+                                      {/* Si aucun type n'est en attente, afficher un message */}
+                                      {(!sub.isPrime || !sub.prime || sub.prime.statut !== 'Soumis') && 
+                                       (!sub.isConge || !sub.conge || sub.conge.statut !== 'Soumis') && (
+                                        <span className="text-xs text-slate-400 italic">Tous validés</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -618,18 +793,25 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       </div>
 
       {/* Validation Dialog */}
-      <Dialog open={validationDialog !== null} onOpenChange={() => setValidationDialog(null)}>
+      <Dialog open={validationDialog !== null} onOpenChange={() => {
+        setValidationDialog(null);
+        setSelectedSubmission(null);
+        setComment('');
+        setValidationType(null);
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
               {validationDialog === 'approve' ? 'Valider l\'EVP' : 'Rejeter l\'EVP'}
             </DialogTitle>
             <DialogDescription>
-              {selectedSubmission && (
-                <>
-                  {selectedSubmission.employee} - {selectedSubmission.type} ({selectedSubmission.amount})
-                </>
-              )}
+              {selectedSubmission && (() => {
+                const employee = selectedSubmission.employee;
+                const employeeName = employee?.prenom 
+                  ? `${employee.prenom} ${employee.nom}`
+                  : employee?.nom || 'Employé';
+                return `${employeeName}${validationType ? ` - ${validationType}` : ''}`;
+              })()}
             </DialogDescription>
           </DialogHeader>
 
@@ -639,7 +821,7 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                 Commentaire {validationDialog === 'reject' ? '(obligatoire)' : '(optionnel)'}
               </label>
               <Textarea
-                placeholder="Ajoutez un commentaire..."
+                placeholder={validationDialog === 'reject' ? 'Veuillez indiquer la raison du rejet...' : 'Ajoutez un commentaire (optionnel)...'}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 rows={4}
@@ -648,7 +830,12 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setValidationDialog(null)}>
+            <Button variant="outline" onClick={() => {
+              setValidationDialog(null);
+              setSelectedSubmission(null);
+              setComment('');
+              setValidationType(null);
+            }}>
               Annuler
             </Button>
             <Button
