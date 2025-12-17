@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Textarea } from './ui/textarea';
-import { CheckSquare, CheckCircle2, XCircle, Filter, Search, LogOut, Bell, BarChart3, Menu, Calendar } from 'lucide-react';
+import { CheckSquare, CheckCircle2, XCircle, Filter, Search, LogOut, Bell, BarChart3, Menu, Calendar, History } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { toast } from 'sonner';
 import { getEVPSubmissions, EVPSubmission, validateEVPSubmission } from '../services/api';
@@ -51,20 +51,26 @@ interface MonthlyReport {
 }
 
 export default function ResponsableServicePage({ user, onLogout }: ResponsableServicePageProps) {
-  const [currentPage, setCurrentPage] = useState<'validation' | 'reporting'>('validation');
+  const [currentPage, setCurrentPage] = useState<'validation' | 'reporting' | 'historique'>('validation');
   const [submissions, setSubmissions] = useState<EVPSubmission[]>([]);
+  const [historicalSubmissions, setHistoricalSubmissions] = useState<EVPSubmission[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [selectedSubmission, setSelectedSubmission] = useState<EVPSubmission | null>(null);
   const [validationDialog, setValidationDialog] = useState<'approve' | 'reject' | null>(null);
   const [comment, setComment] = useState('');
   const [validationType, setValidationType] = useState<'Prime' | 'Congé' | null>(null);
-  const [filterStatus, setFilterStatus] = useState('pending');
   const [searchTerm, setSearchTerm] = useState('');
+  const [historySearchTerm, setHistorySearchTerm] = useState('');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'prime' | 'conge'>('all');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'validé' | 'en_attente' | 'rejeté'>('all');
 
   // Charger les soumissions depuis l'API
   useEffect(() => {
     if (currentPage === 'validation') {
       loadSubmissions();
+    } else if (currentPage === 'historique') {
+      loadHistory();
     }
   }, [currentPage]);
 
@@ -74,17 +80,27 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       console.log('📥 Chargement des soumissions EVP pour validation service...');
       const allSubmissions = await getEVPSubmissions();
       
-      // Filtrer pour ne garder que les soumissions soumises (statut = "Soumis") et non encore validées par le service
-      // Une soumission reste visible tant qu'au moins un type (Prime ou Congé) est encore "Soumis"
+      // Filtrer pour ne garder que les soumissions soumises (statut = "Soumis" ou "Modifié") 
+      // OU rejetées par la division après validation service (statut = "Rejeté" et valideService = true)
+      // Une soumission reste visible tant qu'au moins un type (Prime ou Congé) est encore "Soumis", "Modifié" ou "Rejeté" (après validation service)
       const submittedSubmissions = allSubmissions.filter(sub => {
         const primeStatus = sub.prime?.statut;
         const congeStatus = sub.conge?.statut;
         
-        // Vérifier si au moins un type est encore "Soumis" (en attente de validation)
-        const hasPrimePending = sub.isPrime && sub.prime && primeStatus === 'Soumis';
-        const hasCongePending = sub.isConge && sub.conge && congeStatus === 'Soumis';
+        // Vérifier si au moins un type est encore "Soumis" ou "Modifié" (en attente de validation)
+        // OU rejeté par la division après validation service (doit revenir chez le respo service)
+        const hasPrimePending = sub.isPrime && sub.prime && (
+          primeStatus === 'Soumis' || 
+          primeStatus === 'Modifié' || 
+          (primeStatus === 'Rejeté' && sub.valideService)
+        );
+        const hasCongePending = sub.isConge && sub.conge && (
+          congeStatus === 'Soumis' || 
+          congeStatus === 'Modifié' || 
+          (congeStatus === 'Rejeté' && sub.valideService)
+        );
         
-        // Garder la soumission si au moins un type est encore "Soumis"
+        // Garder la soumission si au moins un type est encore en attente ou rejeté par la division
         return hasPrimePending || hasCongePending;
       });
 
@@ -102,6 +118,43 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       toast.error('Erreur lors du chargement des soumissions: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
     } finally {
       setLoadingSubmissions(false);
+    }
+  };
+
+  const loadHistory = async () => {
+    try {
+      setLoadingHistory(true);
+      console.log('📥 Chargement de l\'historique des validations service...');
+      const allSubmissions = await getEVPSubmissions();
+      
+      // Filtrer pour ne garder que les soumissions qui ont été traitées par le service
+      // (statut = "Soumis", "Modifié", "Validé Service", "Validé Division", "Rejeté")
+      const historySubmissions = allSubmissions.filter(sub => {
+        const primeStatus = sub.prime?.statut;
+        const congeStatus = sub.conge?.statut;
+        
+        // Vérifier si au moins un type a un statut (a été traité)
+        const hasPrimeProcessed = sub.isPrime && sub.prime && primeStatus;
+        const hasCongeProcessed = sub.isConge && sub.conge && congeStatus;
+        
+        // Garder la soumission si au moins un type a un statut
+        return hasPrimeProcessed || hasCongeProcessed;
+      });
+
+      // Trier par date de soumission (les plus récentes en premier)
+      historySubmissions.sort((a, b) => {
+        const dateA = a.prime?.submittedAt || a.conge?.submittedAt || '';
+        const dateB = b.prime?.submittedAt || b.conge?.submittedAt || '';
+        return dateB.localeCompare(dateA);
+      });
+
+      console.log('✅ Historique chargé:', historySubmissions.length);
+      setHistoricalSubmissions(historySubmissions);
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement de l\'historique:', error);
+      toast.error('Erreur lors du chargement de l\'historique: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingHistory(false);
     }
   };
   
@@ -216,6 +269,130 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
     return matchesSearch;
   });
 
+  const filteredHistory = historicalSubmissions.filter(sub => {
+    const employee = sub.employee;
+    if (!employee) return false;
+
+    // Filtre par recherche (matricule, nom, prénom, poste)
+    const searchLower = historySearchTerm.toLowerCase();
+    const matchesSearch = !historySearchTerm || 
+      employee.matricule?.toLowerCase().includes(searchLower) ||
+      employee.nom?.toLowerCase().includes(searchLower) ||
+      employee.prenom?.toLowerCase().includes(searchLower) ||
+      employee.poste?.toLowerCase().includes(searchLower);
+
+    if (!matchesSearch) return false;
+
+    // Fonctions pour déterminer le statut (même logique que dans le rendu)
+    const getPrimeStatus = () => {
+      if (!sub.prime) return null;
+      const statut = sub.prime.statut || 'En attente';
+      // Si validé par le service
+      if (statut === 'Validé Service') return 'Validé';
+      // Si rejeté par le gestionnaire (pas encore validé par le service)
+      if (statut === 'Rejeté' && !sub.valideService) return 'En attente';
+      // Si rejeté par la division après validation service
+      if (statut === 'Rejeté' && sub.valideService) return 'Rejeté';
+      // Si validé par la division
+      if (statut === 'Validé Division' || statut === 'Validé') return 'Validé';
+      // Si soumis ou modifié (en attente de validation)
+      if (statut === 'Soumis' || statut === 'Modifié') return 'En attente';
+      return null;
+    };
+
+    const getCongeStatus = () => {
+      if (!sub.conge) return null;
+      const statut = sub.conge.statut || 'En attente';
+      // Si validé par le service
+      if (statut === 'Validé Service') return 'Validé';
+      // Si rejeté par le gestionnaire (pas encore validé par le service)
+      if (statut === 'Rejeté' && !sub.valideService) return 'En attente';
+      // Si rejeté par la division après validation service
+      if (statut === 'Rejeté' && sub.valideService) return 'Rejeté';
+      // Si validé par la division
+      if (statut === 'Validé Division' || statut === 'Validé') return 'Validé';
+      // Si soumis ou modifié (en attente de validation)
+      if (statut === 'Soumis' || statut === 'Modifié') return 'En attente';
+      return null;
+    };
+
+    // Filtre par type (Prime/Congé)
+    if (historyTypeFilter === 'prime') {
+      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé
+      if (!sub.isPrime || !sub.prime || (sub.isConge && sub.conge)) return false;
+      
+      // Si un filtre de statut est spécifié, vérifier le statut de la prime
+      if (historyStatusFilter !== 'all') {
+        const primeStatus = getPrimeStatus();
+        if (historyStatusFilter === 'validé') {
+          return primeStatus === 'Validé';
+        } else if (historyStatusFilter === 'en_attente') {
+          return primeStatus === 'En attente';
+        } else if (historyStatusFilter === 'rejeté') {
+          return primeStatus === 'Rejeté';
+        }
+      }
+      return true;
+    } else if (historyTypeFilter === 'conge') {
+      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime
+      if (!sub.isConge || !sub.conge || (sub.isPrime && sub.prime)) return false;
+      
+      // Si un filtre de statut est spécifié, vérifier le statut du congé
+      if (historyStatusFilter !== 'all') {
+        const congeStatus = getCongeStatus();
+        if (historyStatusFilter === 'validé') {
+          return congeStatus === 'Validé';
+        } else if (historyStatusFilter === 'en_attente') {
+          return congeStatus === 'En attente';
+        } else if (historyStatusFilter === 'rejeté') {
+          return congeStatus === 'Rejeté';
+        }
+      }
+      return true;
+    } else {
+      // Filtre "Tous les EVP" - si un filtre de statut est spécifié, vérifier que TOUS les types présents correspondent
+      if (historyStatusFilter !== 'all') {
+        const primeStatus = getPrimeStatus();
+        const congeStatus = getCongeStatus();
+        
+        // Si la demande a Prime ET Congé, les deux doivent avoir le statut sélectionné
+        if (sub.isPrime && sub.prime && sub.isConge && sub.conge) {
+          if (historyStatusFilter === 'validé') {
+            return primeStatus === 'Validé' && congeStatus === 'Validé';
+          } else if (historyStatusFilter === 'en_attente') {
+            return primeStatus === 'En attente' && congeStatus === 'En attente';
+          } else if (historyStatusFilter === 'rejeté') {
+            return primeStatus === 'Rejeté' && congeStatus === 'Rejeté';
+          }
+        }
+        // Si seulement Prime, vérifier Prime
+        if (sub.isPrime && sub.prime) {
+          if (historyStatusFilter === 'validé') {
+            return primeStatus === 'Validé';
+          } else if (historyStatusFilter === 'en_attente') {
+            return primeStatus === 'En attente';
+          } else if (historyStatusFilter === 'rejeté') {
+            return primeStatus === 'Rejeté';
+          }
+        }
+        // Si seulement Congé, vérifier Congé
+        if (sub.isConge && sub.conge) {
+          if (historyStatusFilter === 'validé') {
+            return congeStatus === 'Validé';
+          } else if (historyStatusFilter === 'en_attente') {
+            return congeStatus === 'En attente';
+          } else if (historyStatusFilter === 'rejeté') {
+            return congeStatus === 'Rejeté';
+          }
+        }
+        return false;
+      }
+      return true;
+    }
+
+    return true;
+  });
+
   const filteredReports = selectedMonth === 'recent' ? monthlyReports.slice(0, 3) : monthlyReports;
 
   const pendingCount = submissions.length; // Toutes les soumissions affichées sont en attente
@@ -281,6 +458,18 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
           </button>
 
           <button
+            onClick={() => setCurrentPage('historique')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              currentPage === 'historique'
+                ? 'bg-gradient-to-r from-emerald-700 to-emerald-800 text-white shadow-lg shadow-emerald-200'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <History className="w-5 h-5" />
+            <span className="flex-1 text-left">Historique</span>
+          </button>
+
+          <button
             onClick={() => setCurrentPage('reporting')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
               currentPage === 'reporting'
@@ -324,7 +513,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
               <Menu className="w-5 h-5" />
             </Button>
             <h2 className="text-xl text-slate-900">
-              {currentPage === 'validation' ? 'Validation Service' : 'Reporting'}
+              {currentPage === 'validation' ? 'Validation Service' : 
+               currentPage === 'historique' ? 'Historique' : 'Reporting'}
             </h2>
           </div>
 
@@ -422,17 +612,6 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                       </div>
                     </div>
 
-                    <Select value={filterStatus} onValueChange={setFilterStatus}>
-                      <SelectTrigger className="w-48">
-                        <SelectValue placeholder="Statut" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Tous les statuts</SelectItem>
-                        <SelectItem value="pending">En attente</SelectItem>
-                        <SelectItem value="validated">Validé</SelectItem>
-                        <SelectItem value="rejected">Rejeté</SelectItem>
-                      </SelectContent>
-                    </Select>
                   </div>
                 </CardContent>
               </Card>
@@ -459,6 +638,7 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                             <th className="text-left py-3 px-4 text-sm text-slate-600">Durée Congé</th>
                             <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
                             <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Commentaire</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -543,8 +723,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                   </td>
                                   <td className="py-3 px-4">
                                     <div className="flex flex-col gap-2">
-                                      {/* Actions pour Prime - afficher seulement si statut est "Soumis" */}
-                                      {sub.isPrime && sub.prime && sub.prime.statut === 'Soumis' && (
+                                      {/* Actions pour Prime - afficher si statut est "Soumis", "Modifié" ou "Rejeté" après validation service */}
+                                      {sub.isPrime && sub.prime && (sub.prime.statut === 'Soumis' || sub.prime.statut === 'Modifié' || (sub.prime.statut === 'Rejeté' && sub.valideService)) && (
                                         <div className="flex gap-2 mb-1">
                                           <Button
                                             size="sm"
@@ -565,8 +745,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                           </Button>
                                         </div>
                                       )}
-                                      {/* Actions pour Congé - afficher seulement si statut est "Soumis" */}
-                                      {sub.isConge && sub.conge && sub.conge.statut === 'Soumis' && (
+                                      {/* Actions pour Congé - afficher si statut est "Soumis", "Modifié" ou "Rejeté" après validation service */}
+                                      {sub.isConge && sub.conge && (sub.conge.statut === 'Soumis' || sub.conge.statut === 'Modifié' || (sub.conge.statut === 'Rejeté' && sub.valideService)) && (
                                         <div className="flex gap-2">
                                           <Button
                                             size="sm"
@@ -588,10 +768,285 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                         </div>
                                       )}
                                       {/* Si aucun type n'est en attente, afficher un message */}
-                                      {(!sub.isPrime || !sub.prime || sub.prime.statut !== 'Soumis') && 
-                                       (!sub.isConge || !sub.conge || sub.conge.statut !== 'Soumis') && (
+                                      {(!sub.isPrime || !sub.prime || (sub.prime.statut !== 'Soumis' && sub.prime.statut !== 'Modifié' && !(sub.prime.statut === 'Rejeté' && sub.valideService))) && 
+                                       (!sub.isConge || !sub.conge || (sub.conge.statut !== 'Soumis' && sub.conge.statut !== 'Modifié' && !(sub.conge.statut === 'Rejeté' && sub.valideService))) && (
                                         <span className="text-xs text-slate-400 italic">Tous validés</span>
                                       )}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {/* Commentaire de rejet par la division pour Prime */}
+                                      {sub.isPrime && sub.prime && sub.prime.statut === 'Rejeté' && sub.valideService && sub.prime.commentaire && (
+                                        <div className="mb-1 text-xs text-red-700 bg-red-50 p-2 rounded border border-red-200">
+                                          <strong>Prime:</strong> {sub.prime.commentaire}
+                                        </div>
+                                      )}
+                                      {/* Commentaire de rejet par la division pour Congé */}
+                                      {sub.isConge && sub.conge && sub.conge.statut === 'Rejeté' && sub.valideService && sub.conge.commentaire && (
+                                        <div className="text-xs text-red-700 bg-red-50 p-2 rounded border border-red-200">
+                                          <strong>Congé:</strong> {sub.conge.commentaire}
+                                        </div>
+                                      )}
+                                      {/* Si aucun commentaire */}
+                                      {(!sub.isPrime || !sub.prime || !(sub.prime.statut === 'Rejeté' && sub.valideService && sub.prime.commentaire)) && 
+                                       (!sub.isConge || !sub.conge || !(sub.conge.statut === 'Rejeté' && sub.valideService && sub.conge.commentaire)) && (
+                                        <span className="text-slate-400 text-xs">-</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ) : currentPage === 'historique' ? (
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="bg-gradient-to-r from-emerald-700 to-emerald-800 text-white rounded-2xl p-6">
+                <h1 className="text-2xl mb-2">Historique des Validations</h1>
+                <p className="opacity-90">
+                  Historique complet des validations traitées par le service - {user.division}
+                </p>
+              </div>
+
+              {/* Filters */}
+              <Card className="border-slate-200">
+                <CardContent className="p-4">
+                  <div className="flex flex-wrap gap-4">
+                    <div className="flex-1 min-w-64">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                        <Input
+                          placeholder="Rechercher par nom ou matricule..."
+                          value={historySearchTerm}
+                          onChange={(e) => setHistorySearchTerm(e.target.value)}
+                          className="pl-10"
+                        />
+                      </div>
+                    </div>
+                    <div className="w-48">
+                      <Select value={historyTypeFilter} onValueChange={(value: 'all' | 'prime' | 'conge') => setHistoryTypeFilter(value)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filtrer par type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous les EVP</SelectItem>
+                          <SelectItem value="prime">Prime</SelectItem>
+                          <SelectItem value="conge">Congé</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="w-48">
+                      <Select value={historyStatusFilter} onValueChange={(value: 'all' | 'validé' | 'en_attente' | 'rejeté') => setHistoryStatusFilter(value)}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Filtrer par statut" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Tous les statuts</SelectItem>
+                          <SelectItem value="validé">Validé</SelectItem>
+                          <SelectItem value="en_attente">En attente</SelectItem>
+                          <SelectItem value="rejeté">Rejeté</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* History table */}
+              <Card className="border-slate-200">
+                <CardHeader>
+                  <CardTitle>Historique des validations</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {loadingHistory ? (
+                    <div className="text-center py-8 text-slate-500">Chargement de l'historique...</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Type EVP</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Prime (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Indemnité (DH)</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Durée Congé</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Date soumission</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredHistory.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} className="text-center py-8 text-slate-500">
+                                Aucun historique disponible
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredHistory.map((sub) => {
+                              const employee = sub.employee;
+                              const nomComplet = employee?.prenom ? `${employee.prenom} ${employee.nom}` : employee?.nom || '-';
+                              
+                              // Type EVP - ne garder que les types qui ont un statut (traités)
+                              const typeEVPItems = [];
+                              if (sub.isPrime && sub.prime && sub.prime.statut) typeEVPItems.push('Prime');
+                              if (sub.isConge && sub.conge && sub.conge.statut) typeEVPItems.push('Congé');
+
+                              const montantPrime = sub.prime?.montantCalcule 
+                                ? (typeof sub.prime.montantCalcule === 'string' 
+                                    ? parseFloat(sub.prime.montantCalcule) 
+                                    : sub.prime.montantCalcule).toFixed(2)
+                                : '-';
+                              
+                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                                ? (typeof sub.conge.indemniteCalculee === 'string' 
+                                    ? parseFloat(sub.conge.indemniteCalculee) 
+                                    : sub.conge.indemniteCalculee).toFixed(2)
+                                : '-';
+
+                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+
+                              // Dates de soumission
+                              const formatDate = (dateStr: string | undefined) => {
+                                if (!dateStr) return null;
+                                return new Date(dateStr).toLocaleDateString('fr-FR', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  year: 'numeric'
+                                });
+                              };
+                              const datePrime = formatDate(sub.prime?.submittedAt);
+                              const dateConge = formatDate(sub.conge?.submittedAt);
+
+                              // Fonctions pour déterminer le statut dans l'historique
+                              // "Validé" si validé par respo service
+                              // "En attente" si rejeté au gestionnaire (statut = "Rejeté" et valideService = false)
+                              // "Rejeté" si rejeté par respo division (statut = "Rejeté" et valideService = true)
+                              const getPrimeStatus = () => {
+                                if (!sub.prime) return null;
+                                const statut = sub.prime.statut || 'En attente';
+                                // Si validé par le service
+                                if (statut === 'Validé Service') return 'Validé';
+                                // Si rejeté par le gestionnaire (pas encore validé par le service)
+                                if (statut === 'Rejeté' && !sub.valideService) return 'En attente';
+                                // Si rejeté par la division après validation service
+                                if (statut === 'Rejeté' && sub.valideService) return 'Rejeté';
+                                // Si validé par la division
+                                if (statut === 'Validé Division' || statut === 'Validé') return 'Validé';
+                                // Si soumis ou modifié (en attente de validation)
+                                if (statut === 'Soumis' || statut === 'Modifié') return 'En attente';
+                                return null;
+                              };
+
+                              const getCongeStatus = () => {
+                                if (!sub.conge) return null;
+                                const statut = sub.conge.statut || 'En attente';
+                                // Si validé par le service
+                                if (statut === 'Validé Service') return 'Validé';
+                                // Si rejeté par le gestionnaire (pas encore validé par le service)
+                                if (statut === 'Rejeté' && !sub.valideService) return 'En attente';
+                                // Si rejeté par la division après validation service
+                                if (statut === 'Rejeté' && sub.valideService) return 'Rejeté';
+                                // Si validé par la division
+                                if (statut === 'Validé Division' || statut === 'Validé') return 'Validé';
+                                // Si soumis ou modifié (en attente de validation)
+                                if (statut === 'Soumis' || statut === 'Modifié') return 'En attente';
+                                return null;
+                              };
+
+                              return (
+                                <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                  <td className="py-3 px-4">
+                                    <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                                      {employee?.matricule || '-'}
+                                    </Badge>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{nomComplet}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{employee?.poste || '-'}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {typeEVPItems.map((type, idx) => (
+                                        <Badge 
+                                          key={idx}
+                                          className={type === 'Prime' 
+                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-blue-50 text-blue-700 border border-blue-200'}
+                                        >
+                                          {type}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantPrime !== '-' ? `${montantPrime} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-900">{montantIndemnite !== '-' ? `${montantIndemnite} DH` : '-'}</td>
+                                  <td className="py-3 px-4 text-sm text-slate-700">{dureeConge}</td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1 text-sm text-slate-600">
+                                      {datePrime && (
+                                        <div>{datePrime}</div>
+                                      )}
+                                      {dateConge && (
+                                        <div>{dateConge}</div>
+                                      )}
+                                      {!datePrime && !dateConge && <span>-</span>}
+                                    </div>
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex flex-col gap-1">
+                                      {typeEVPItems.map((type, idx) => {
+                                        const isPrimeType = type === 'Prime';
+                                        const isCongeType = type === 'Congé';
+                                        
+                                        // Obtenir le statut pour ce type
+                                        const status = isPrimeType 
+                                          ? getPrimeStatus()
+                                          : getCongeStatus();
+                                        
+                                        if (!status) {
+                                          return null;
+                                        }
+                                        
+                                        if (status === 'Validé') {
+                                          return (
+                                            <div key={idx}>
+                                              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">
+                                                Validé
+                                              </Badge>
+                                            </div>
+                                          );
+                                        }
+                                        
+                                        if (status === 'En attente') {
+                                          return (
+                                            <div key={idx}>
+                                              <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">
+                                                En attente
+                                              </Badge>
+                                            </div>
+                                          );
+                                        }
+                                        
+                                        if (status === 'Rejeté') {
+                                          return (
+                                            <div key={idx}>
+                                              <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">
+                                                Rejeté
+                                              </Badge>
+                                            </div>
+                                          );
+                                        }
+                                        
+                                        return null;
+                                      })}
                                     </div>
                                   </td>
                                 </tr>

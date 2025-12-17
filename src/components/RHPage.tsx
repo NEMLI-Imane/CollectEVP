@@ -49,6 +49,9 @@ interface EVPRecord {
 
 export default function RHPage({ user, onLogout }: RHPageProps) {
   const [currentPage, setCurrentPage] = useState<'dashboard' | 'reporting' | 'export' | 'settings' | 'employees' | 'requests'>('dashboard');
+  const [exportView, setExportView] = useState<'primes' | 'conges'>('primes');
+  const [exportData, setExportData] = useState<EVPSubmission[]>([]);
+  const [loadingExport, setLoadingExport] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDivision, setFilterDivision] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -87,7 +90,10 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
       console.log('🔄 Chargement de l\'historique pour le reporting');
       loadHistoricalSubmissions();
     }
-  }, [currentPage]);
+    if (currentPage === 'export') {
+      loadExportData();
+    }
+  }, [currentPage, exportView]);
 
   const loadEmployees = async () => {
     try {
@@ -229,6 +235,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
   const [loadingHistorical, setLoadingHistorical] = useState(false);
   const [reportingSearchTerm, setReportingSearchTerm] = useState('');
   const [reportingFilterDivision, setReportingFilterDivision] = useState('all');
+  const [reportingFilterType, setReportingFilterType] = useState<'all' | 'prime' | 'conge'>('all');
   const [reportingFilterStatus, setReportingFilterStatus] = useState('all');
   const [reportingFilterGestionnaire, setReportingFilterGestionnaire] = useState('all');
 
@@ -248,20 +255,69 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     // Filtre par division
     const matchesDivision = reportingFilterDivision === 'all' || employee.division === reportingFilterDivision;
 
+    // Fonction pour déterminer le statut affiché (soumis/validé/rejeté)
+    const getPrimeStatusDisplay = () => {
+      if (!sub.isPrime || !sub.prime) return null;
+      const statut = sub.prime.statut || 'En attente';
+      if (statut === 'Soumis' || statut === 'Modifié') return 'soumis';
+      if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'valide';
+      if (statut === 'Rejeté') return 'rejete';
+      return null;
+    };
+
+    const getCongeStatusDisplay = () => {
+      if (!sub.isConge || !sub.conge) return null;
+      const statut = sub.conge.statut || 'En attente';
+      if (statut === 'Soumis' || statut === 'Modifié') return 'soumis';
+      if (statut === 'Validé Service' || statut === 'Validé Division' || statut === 'Validé') return 'valide';
+      if (statut === 'Rejeté') return 'rejete';
+      return null;
+    };
+
+    // Filtre par type (Prime/Congé)
+    let matchesType = true;
+    if (reportingFilterType === 'prime') {
+      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé
+      matchesType = sub.isPrime && sub.prime !== undefined && !(sub.isConge && sub.conge !== undefined);
+    } else if (reportingFilterType === 'conge') {
+      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime
+      matchesType = sub.isConge && sub.conge !== undefined && !(sub.isPrime && sub.prime !== undefined);
+    }
+
     // Filtre par statut
-    const primeStatus = sub.prime?.statut;
-    const congeStatus = sub.conge?.statut;
-    const currentStatus = primeStatus || congeStatus || 'En attente';
-    const matchesStatus = reportingFilterStatus === 'all' || 
-      (reportingFilterStatus === 'soumis' && currentStatus === 'Soumis') ||
-      (reportingFilterStatus === 'valide' && currentStatus === 'Validé') ||
-      (reportingFilterStatus === 'rejete' && currentStatus === 'Rejeté');
+    let matchesStatus = true;
+    if (reportingFilterStatus !== 'all') {
+      if (reportingFilterType === 'prime') {
+        const primeStatus = getPrimeStatusDisplay();
+        matchesStatus = primeStatus === reportingFilterStatus;
+      } else if (reportingFilterType === 'conge') {
+        const congeStatus = getCongeStatusDisplay();
+        matchesStatus = congeStatus === reportingFilterStatus;
+      } else {
+        // Tous les EVP - vérifier que TOUS les types présents correspondent
+        const primeStatus = getPrimeStatusDisplay();
+        const congeStatus = getCongeStatusDisplay();
+        
+        // Si la demande a Prime ET Congé, les deux doivent avoir le statut sélectionné
+        if (sub.isPrime && sub.prime && sub.isConge && sub.conge) {
+          matchesStatus = primeStatus === reportingFilterStatus && congeStatus === reportingFilterStatus;
+        } else if (sub.isPrime && sub.prime) {
+          // Si seulement Prime
+          matchesStatus = primeStatus === reportingFilterStatus;
+        } else if (sub.isConge && sub.conge) {
+          // Si seulement Congé
+          matchesStatus = congeStatus === reportingFilterStatus;
+        } else {
+          matchesStatus = false;
+        }
+      }
+    }
 
     // Filtre par gestionnaire
     const matchesGestionnaire = reportingFilterGestionnaire === 'all' || 
       sub.submittedBy?.name === reportingFilterGestionnaire;
 
-    return matchesSearch && matchesDivision && matchesStatus && matchesGestionnaire;
+    return matchesSearch && matchesDivision && matchesType && matchesStatus && matchesGestionnaire;
   });
 
   // Obtenir la liste unique des gestionnaires
@@ -294,22 +350,175 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     return matchesDivision && matchesStatus && matchesSearch;
   });
 
-  const handleExportCSV = () => {
-    toast.success('Export CSV lancé', {
-      description: 'Le fichier sera téléchargé dans quelques instants',
-    });
-  };
-
   const handleExportPDF = () => {
     toast.success('Export PDF lancé', {
       description: 'Le rapport sera téléchargé dans quelques instants',
     });
   };
 
-  const handleExportOracle = () => {
-    toast.success('Export vers Oracle ERP lancé', {
-      description: 'Les données sont en cours de synchronisation',
+  const handleExportCSVReporting = () => {
+    toast.success('Export CSV lancé', {
+      description: 'Le fichier sera téléchargé dans quelques instants',
     });
+  };
+
+  const loadExportData = async () => {
+    try {
+      setLoadingExport(true);
+      console.log('📥 Chargement des données pour export...');
+      const allSubmissions = await getEVPSubmissions();
+      
+      // Filtrer uniquement les soumissions validées (statut = "Validé" ou "Validé Division")
+      const validatedSubmissions = allSubmissions.filter(sub => {
+        if (exportView === 'primes') {
+          return sub.isPrime && sub.prime && 
+            (sub.prime.statut === 'Validé' || sub.prime.statut === 'Validé Division');
+        } else {
+          return sub.isConge && sub.conge && 
+            (sub.conge.statut === 'Validé' || sub.conge.statut === 'Validé Division');
+        }
+      });
+
+      console.log('✅ Données d\'export chargées:', validatedSubmissions.length);
+      setExportData(validatedSubmissions);
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des données d\'export:', error);
+      toast.error('Erreur lors du chargement des données: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingExport(false);
+    }
+  };
+
+  const handleExportCSV = () => {
+    try {
+      let csvContent = '';
+      let headers: string[] = [];
+      let rows: string[][] = [];
+
+      if (exportView === 'primes') {
+        // Headers pour Prime
+        headers = [
+          'Matricule',
+          'Nom',
+          'Prénom',
+          'Poste',
+          'Service',
+          'Division',
+          'Taux Monétaire',
+          'Groupe',
+          'Nombre Postes',
+          'Score Equipe',
+          'Note Hiérarchique',
+          'Score Collectif',
+          'Statut',
+          'Date Soumission',
+          'Commentaire'
+        ];
+
+        // Rows pour Prime
+        rows = exportData
+          .filter(sub => sub.isPrime && sub.prime)
+          .map(sub => {
+            const emp = sub.employee;
+            const prime = sub.prime!;
+            return [
+              emp?.matricule || '',
+              emp?.nom || '',
+              emp?.prenom || '',
+              emp?.poste || '',
+              emp?.service || '',
+              emp?.division || '',
+              prime.tauxMonetaire?.toString() || '',
+              prime.groupe?.toString() || '',
+              prime.nombrePostes?.toString() || '',
+              prime.scoreEquipe?.toString() || '',
+              prime.noteHierarchique?.toString() || '',
+              prime.scoreCollectif?.toString() || '',
+              prime.statut || '',
+              prime.submittedAt ? new Date(prime.submittedAt).toLocaleDateString('fr-FR') : '',
+              prime.commentaire || ''
+            ];
+          });
+      } else {
+        // Headers pour Congé
+        headers = [
+          'Matricule',
+          'Nom',
+          'Prénom',
+          'Poste',
+          'Service',
+          'Division',
+          'Date Début',
+          'Date Fin',
+          'Nombre Jours',
+          'Tranche',
+          'Avance sur Congé',
+          'Montant Avance',
+          'Indemnité Forfaitaire',
+          'Statut',
+          'Date Soumission',
+          'Commentaire'
+        ];
+
+        // Rows pour Congé
+        rows = exportData
+          .filter(sub => sub.isConge && sub.conge)
+          .map(sub => {
+            const emp = sub.employee;
+            const conge = sub.conge!;
+            return [
+              emp?.matricule || '',
+              emp?.nom || '',
+              emp?.prenom || '',
+              emp?.poste || '',
+              emp?.service || '',
+              emp?.division || '',
+              conge.dateDebut || '',
+              conge.dateFin || '',
+              conge.nombreJours?.toString() || '',
+              conge.tranche?.toString() || '',
+              conge.avanceSurConge ? 'Oui' : 'Non',
+              conge.montantAvance?.toString() || '',
+              conge.indemniteForfaitaire?.toString() || '',
+              conge.statut || '',
+              conge.submittedAt ? new Date(conge.submittedAt).toLocaleDateString('fr-FR') : '',
+              conge.commentaire || ''
+            ];
+          });
+      }
+
+      // Construire le CSV
+      csvContent = headers.join(';') + '\n';
+      rows.forEach(row => {
+        // Échapper les valeurs contenant des points-virgules ou des guillemets
+        const escapedRow = row.map(cell => {
+          const cellStr = String(cell || '');
+          if (cellStr.includes(';') || cellStr.includes('"') || cellStr.includes('\n')) {
+            return `"${cellStr.replace(/"/g, '""')}"`;
+          }
+          return cellStr;
+        });
+        csvContent += escapedRow.join(';') + '\n';
+      });
+
+      // Créer et télécharger le fichier
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', `export_${exportView}_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast.success('Export CSV réussi', {
+        description: `Le fichier ${exportView === 'primes' ? 'primes' : 'congés'} a été téléchargé`,
+      });
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'export CSV:', error);
+      toast.error('Erreur lors de l\'export CSV: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    }
   };
 
   const handleTestConnection = () => {
@@ -489,7 +698,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
             }`}
           >
             <Database className="w-5 h-5" />
-            <span className="flex-1 text-left">Export Oracle</span>
+            <span className="flex-1 text-left">Export</span>
           </button>
 
           <button
@@ -540,7 +749,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
               {currentPage === 'reporting' && 'Reporting Global'}
               {currentPage === 'employees' && 'Gestion des Employés'}
               {currentPage === 'requests' && 'Demandes des Gestionnaires'}
-              {currentPage === 'export' && 'Export Oracle ERP'}
+              {currentPage === 'export' && 'Export'}
               {currentPage === 'settings' && 'Paramètres'}
             </h2>
           </div>
@@ -643,18 +852,8 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
 
           {currentPage === 'reporting' && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
+              <div>
                 <h1 className="text-2xl text-slate-900">Reporting Global</h1>
-                <div className="flex gap-3">
-                  <Button onClick={handleExportCSV} variant="outline">
-                    <Download className="w-4 h-4 mr-2" />
-                    Export CSV
-                  </Button>
-                  <Button onClick={handleExportPDF} className="bg-emerald-600 hover:bg-emerald-700">
-                    <FileText className="w-4 h-4 mr-2" />
-                    Export PDF
-                  </Button>
-                </div>
               </div>
 
               <Card className="border-slate-200">
@@ -683,6 +882,17 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                         <SelectItem value="Logistique">Logistique</SelectItem>
                         <SelectItem value="Administration">Administration</SelectItem>
                         <SelectItem value="Maintenance">Maintenance</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={reportingFilterType} onValueChange={(value: 'all' | 'prime' | 'conge') => setReportingFilterType(value)}>
+                      <SelectTrigger className="w-48">
+                        <SelectValue placeholder="Type EVP" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Tous les EVP</SelectItem>
+                        <SelectItem value="prime">Prime</SelectItem>
+                        <SelectItem value="conge">Congé</SelectItem>
                       </SelectContent>
                     </Select>
 
@@ -993,52 +1203,182 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
 
           {currentPage === 'export' && (
             <div className="space-y-6">
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                <p className="text-sm text-blue-900">
-                  <strong>Export Oracle ERP:</strong> Synchronisez les données validées vers le système de paie Oracle
+              <div className="bg-gradient-to-r from-emerald-600 to-emerald-800 text-white rounded-2xl p-6">
+                <h1 className="text-2xl mb-2">Export des Données</h1>
+                <p className="opacity-90">
+                  Exportez les données validées des primes et congés au format CSV
                 </p>
+              </div>
+
+              {/* Sous-onglets Export Primes / Export Congés */}
+              <div className="flex gap-2 border-b border-slate-200">
+                <button
+                  onClick={() => setExportView('primes')}
+                  className={`px-6 py-3 font-medium transition-all ${
+                    exportView === 'primes'
+                      ? 'border-b-2 border-emerald-600 text-emerald-600'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Export Primes
+                </button>
+                <button
+                  onClick={() => setExportView('conges')}
+                  className={`px-6 py-3 font-medium transition-all ${
+                    exportView === 'conges'
+                      ? 'border-b-2 border-emerald-600 text-emerald-600'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Export Congés
+                </button>
               </div>
 
               <Card className="border-slate-200">
                 <CardHeader>
-                  <CardTitle>Export vers Oracle ERP</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 bg-emerald-50 rounded-xl text-center">
-                      <p className="text-sm text-emerald-700">EVP prêts à exporter</p>
-                      <p className="text-3xl text-emerald-700 mt-2">{validatedCount}</p>
-                    </div>
-                    <div className="p-4 bg-blue-50 rounded-xl text-center">
-                      <p className="text-sm text-blue-700">Dernière synchro</p>
-                      <p className="text-xl text-blue-700 mt-2">2025-10-12</p>
-                      <p className="text-xs text-blue-600 mt-1">14:30</p>
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-xl text-center">
-                      <p className="text-sm text-slate-700">Statut connexion</p>
-                      <div className="flex items-center justify-center gap-2 mt-2">
-                        <div className="w-2 h-2 bg-emerald-600 rounded-full animate-pulse"></div>
-                        <p className="text-lg text-slate-900">Connecté</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>
+                      {exportView === 'primes' ? 'Liste des Primes Validées' : 'Liste des Congés Validés'}
+                    </CardTitle>
                     <Button
-                      onClick={handleExportOracle}
-                      className="bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800"
+                      onClick={handleExportCSV}
+                      className="bg-emerald-600 hover:bg-emerald-700"
+                      disabled={loadingExport || exportData.length === 0}
                     >
-                      <Database className="w-4 h-4 mr-2" />
-                      Envoyer vers Oracle
+                      <Download className="w-4 h-4 mr-2" />
+                      Télécharger CSV
                     </Button>
                   </div>
-
-                  <div className="p-4 bg-slate-50 rounded-xl">
-                    <p className="text-sm text-slate-600">
-                      💡 <strong>Note:</strong> L'export Oracle transfère uniquement les EVP avec statut "Validé". 
-                      Les données sont automatiquement archivées après export.
-                    </p>
-                  </div>
+                </CardHeader>
+                <CardContent>
+                  {loadingExport ? (
+                    <div className="text-center py-8 text-slate-500">Chargement des données...</div>
+                  ) : exportData.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500">
+                      Aucune donnée validée disponible pour l'export
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            {exportView === 'primes' ? (
+                              <>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Prénom</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Service</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Taux Monétaire</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Groupe</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Nombre Postes</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Score Equipe</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Note Hiérarchique</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Score Collectif</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Date Soumission</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Commentaire</th>
+                              </>
+                            ) : (
+                              <>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Matricule</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Prénom</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Poste</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Service</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Date Début</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Date Fin</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Nombre Jours</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Tranche</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Avance sur Congé</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Avance</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Indemnité Forfaitaire</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Date Soumission</th>
+                                <th className="text-left py-3 px-4 text-sm text-slate-600">Commentaire</th>
+                              </>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {exportView === 'primes' ? (
+                            exportData
+                              .filter(sub => sub.isPrime && sub.prime)
+                              .map((sub) => {
+                                const emp = sub.employee;
+                                const prime = sub.prime!;
+                                return (
+                                  <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.matricule || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.nom || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.prenom || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.poste || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.service || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.division || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.tauxMonetaire || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.groupe || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.nombrePostes || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.scoreEquipe || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.noteHierarchique || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{prime.scoreCollectif || '-'}</td>
+                                    <td className="py-3 px-4">
+                                      <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">
+                                        {prime.statut || '-'}
+                                      </Badge>
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-600">
+                                      {prime.submittedAt ? new Date(prime.submittedAt).toLocaleDateString('fr-FR') : '-'}
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-600">{prime.commentaire || '-'}</td>
+                                  </tr>
+                                );
+                              })
+                          ) : (
+                            exportData
+                              .filter(sub => sub.isConge && sub.conge)
+                              .map((sub) => {
+                                const emp = sub.employee;
+                                const conge = sub.conge!;
+                                return (
+                                  <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.matricule || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.nom || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{emp?.prenom || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.poste || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.service || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-700">{emp?.division || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">
+                                      {conge.dateDebut ? new Date(conge.dateDebut).toLocaleDateString('fr-FR') : '-'}
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">
+                                      {conge.dateFin ? new Date(conge.dateFin).toLocaleDateString('fr-FR') : '-'}
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{conge.nombreJours || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{conge.tranche || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">
+                                      {conge.avanceSurConge ? 'Oui' : 'Non'}
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{conge.montantAvance || '-'}</td>
+                                    <td className="py-3 px-4 text-sm text-slate-900">{conge.indemniteForfaitaire || '-'}</td>
+                                    <td className="py-3 px-4">
+                                      <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">
+                                        {conge.statut || '-'}
+                                      </Badge>
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-600">
+                                      {conge.submittedAt ? new Date(conge.submittedAt).toLocaleDateString('fr-FR') : '-'}
+                                    </td>
+                                    <td className="py-3 px-4 text-sm text-slate-600">{conge.commentaire || '-'}</td>
+                                  </tr>
+                                );
+                              })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

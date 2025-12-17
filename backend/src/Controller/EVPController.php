@@ -539,7 +539,7 @@ class EVPController extends AbstractController
                         ], Response::HTTP_BAD_REQUEST);
                     }
                     $submission->getPrime()->setStatut($data['prime']['statut']);
-                    if ($data['prime']['statut'] === 'Soumis') {
+                    if ($data['prime']['statut'] === 'Soumis' || $data['prime']['statut'] === 'Modifié') {
                         if (isset($data['prime']['submittedAt']) && !empty($data['prime']['submittedAt'])) {
                             try {
                                 // Le frontend envoie une date ISO string, on la convertit en DateTimeImmutable
@@ -558,8 +558,8 @@ class EVPController extends AbstractController
                             $submission->getPrime()->setSubmittedAt(new \DateTimeImmutable());
                         }
                     }
-                    // Gérer le commentaire si fourni
-                    if (isset($data['prime']['commentaire'])) {
+                    // Gérer le commentaire si fourni (peut être null pour supprimer)
+                    if (array_key_exists('commentaire', $data['prime'])) {
                         $submission->getPrime()->setCommentaire($data['prime']['commentaire']);
                     }
                 }
@@ -582,7 +582,7 @@ class EVPController extends AbstractController
                         ], Response::HTTP_BAD_REQUEST);
                     }
                     $submission->getConge()->setStatut($data['conge']['statut']);
-                    if ($data['conge']['statut'] === 'Soumis') {
+                    if ($data['conge']['statut'] === 'Soumis' || $data['conge']['statut'] === 'Modifié') {
                         if (isset($data['conge']['submittedAt']) && !empty($data['conge']['submittedAt'])) {
                             try {
                                 // Le frontend envoie une date ISO string, on la convertit en DateTimeImmutable
@@ -601,8 +601,8 @@ class EVPController extends AbstractController
                             $submission->getConge()->setSubmittedAt(new \DateTimeImmutable());
                         }
                     }
-                    // Gérer le commentaire si fourni
-                    if (isset($data['conge']['commentaire'])) {
+                    // Gérer le commentaire si fourni (peut être null pour supprimer)
+                    if (array_key_exists('commentaire', $data['conge'])) {
                         $submission->getConge()->setCommentaire($data['conge']['commentaire']);
                     }
                 }
@@ -845,13 +845,21 @@ class EVPController extends AbstractController
      * Valider ou rejeter une soumission EVP (par Responsable Service ou Division)
      */
     #[Route('/submissions/{id}/validate', name: 'validate', methods: ['PUT'])]
-    #[IsGranted('ROLE_RESPONSABLE_SERVICE')]
     public function validateSubmission(int $id, Request $request): JsonResponse
     {
         try {
             $user = $this->getUser();
             if (!$user instanceof User) {
                 return new JsonResponse(['error' => 'Not authenticated'], Response::HTTP_UNAUTHORIZED);
+            }
+
+            // Vérifier que l'utilisateur a le bon rôle
+            $userRoles = $user->getRoles();
+            $isResponsableService = in_array('ROLE_RESPONSABLE_SERVICE', $userRoles);
+            $isResponsableDivision = in_array('ROLE_RESPONSABLE_DIVISION', $userRoles);
+            
+            if (!$isResponsableService && !$isResponsableDivision) {
+                return new JsonResponse(['error' => 'Access denied. Required role: ROLE_RESPONSABLE_SERVICE or ROLE_RESPONSABLE_DIVISION'], Response::HTTP_FORBIDDEN);
             }
 
             $submission = $this->evpRepository->find($id);
@@ -865,9 +873,17 @@ class EVPController extends AbstractController
             }
 
             $action = $data['action'] ?? null; // 'approve' ou 'reject'
-            $niveau = $data['niveau'] ?? 'service'; // 'service' ou 'division'
+            $niveau = $data['niveau'] ?? ($isResponsableService ? 'service' : 'division'); // 'service' ou 'division'
             $commentaire = $data['commentaire'] ?? null;
             $type = $data['type'] ?? null; // 'Prime' ou 'Congé' - optionnel, si fourni, valide uniquement ce type
+
+            // Vérifier que le niveau correspond au rôle de l'utilisateur
+            if ($niveau === 'service' && !$isResponsableService) {
+                return new JsonResponse(['error' => 'Only ROLE_RESPONSABLE_SERVICE can validate at service level'], Response::HTTP_FORBIDDEN);
+            }
+            if ($niveau === 'division' && !$isResponsableDivision) {
+                return new JsonResponse(['error' => 'Only ROLE_RESPONSABLE_DIVISION can validate at division level'], Response::HTTP_FORBIDDEN);
+            }
 
             if (!$action || !in_array($action, ['approve', 'reject'])) {
                 return new JsonResponse(['error' => 'Action must be "approve" or "reject"'], Response::HTTP_BAD_REQUEST);
@@ -977,17 +993,20 @@ class EVPController extends AbstractController
                         }
                     }
                 } else {
-                    // Rejet
+                    // Rejet par la division - la demande doit revenir chez le respo service
+                    // valideService reste à true car le service a déjà validé
                     // Si un type spécifique est fourni, rejeter uniquement ce type
                     if ($type === 'Prime' && $submission->isPrime() && $submission->getPrime()) {
                         $submission->getPrime()->setStatut('Rejeté');
                         $submission->getPrime()->setCommentaire($commentaire);
+                        // Ne pas mettre valideDivision à false car on veut que ça revienne chez le respo service
                     } elseif ($type === 'Congé' && $submission->isConge() && $submission->getConge()) {
                         $submission->getConge()->setStatut('Rejeté');
                         $submission->getConge()->setCommentaire($commentaire);
+                        // Ne pas mettre valideDivision à false car on veut que ça revienne chez le respo service
                     } elseif (!$type) {
                         // Si aucun type n'est spécifié, rejeter tous les types présents
-                        $submission->setValideDivision(false);
+                        // Ne pas mettre valideDivision à false car on veut que ça revienne chez le respo service
                         if ($submission->isPrime() && $submission->getPrime()) {
                             $submission->getPrime()->setStatut('Rejeté');
                             $submission->getPrime()->setCommentaire($commentaire);
