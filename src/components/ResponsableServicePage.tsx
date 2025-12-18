@@ -51,7 +51,7 @@ interface MonthlyReport {
 }
 
 export default function ResponsableServicePage({ user, onLogout }: ResponsableServicePageProps) {
-  const [currentPage, setCurrentPage] = useState<'validation' | 'reporting' | 'historique'>('validation');
+  const [currentPage, setCurrentPage] = useState<'validation' | 'historique'>('validation');
   const [submissions, setSubmissions] = useState<EVPSubmission[]>([]);
   const [historicalSubmissions, setHistoricalSubmissions] = useState<EVPSubmission[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
@@ -80,25 +80,82 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       console.log('📥 Chargement des soumissions EVP pour validation service...');
       const allSubmissions = await getEVPSubmissions();
       
-      // Filtrer pour ne garder que les soumissions soumises (statut = "Soumis" ou "Modifié") 
-      // OU rejetées par la division après validation service (statut = "Rejeté" et valideService = true)
-      // Une soumission reste visible tant qu'au moins un type (Prime ou Congé) est encore "Soumis", "Modifié" ou "Rejeté" (après validation service)
+      // Filtrer pour ne garder que les soumissions qui ont au moins un type en attente
+      // (statut = "Soumis" ou "Modifié" ou "Rejeté" après validation service par la division)
+      // Les types rejetés par le respo service ou validés seront filtrés dans le rendu
       const submittedSubmissions = allSubmissions.filter(sub => {
         const primeStatus = sub.prime?.statut;
         const congeStatus = sub.conge?.statut;
         
         // Vérifier si au moins un type est encore "Soumis" ou "Modifié" (en attente de validation)
         // OU rejeté par la division après validation service (doit revenir chez le respo service)
+        // IMPORTANT: Si un type est rejeté par le service (valideService = false), on vérifie quand même
+        // si l'autre type est encore en attente ou rejeté par la division
+        // Vérifier si un type est encore en attente (pas validé, pas rejeté par le service)
         const hasPrimePending = sub.isPrime && sub.prime && (
-          primeStatus === 'Soumis' || 
-          primeStatus === 'Modifié' || 
-          (primeStatus === 'Rejeté' && sub.valideService)
+          (primeStatus === 'Soumis' || 
+           primeStatus === 'Modifié' || 
+           (primeStatus === 'Rejeté' && sub.valideService)) && // Rejeté par la division (doit revenir)
+          primeStatus !== 'Validé Service' && 
+          primeStatus !== 'Validé Division' && 
+          primeStatus !== 'Validé' // Exclure les types déjà validés
         );
         const hasCongePending = sub.isConge && sub.conge && (
-          congeStatus === 'Soumis' || 
-          congeStatus === 'Modifié' || 
-          (congeStatus === 'Rejeté' && sub.valideService)
+          (congeStatus === 'Soumis' || 
+           congeStatus === 'Modifié' || 
+           (congeStatus === 'Rejeté' && sub.valideService)) && // Rejeté par la division (doit revenir)
+          congeStatus !== 'Validé Service' && 
+          congeStatus !== 'Validé Division' && 
+          congeStatus !== 'Validé' // Exclure les types déjà validés
         );
+        
+        // Cas spécial: Si un type est rejeté par le service (valideService = false), 
+        // vérifier si l'autre type est encore en attente ou rejeté par la division
+        // Si Prime est rejeté par le service mais Congé est encore en attente, garder la soumission
+        const primeRejectedByService = sub.isPrime && sub.prime && 
+          primeStatus === 'Rejeté' && !sub.valideService;
+        const congeRejectedByService = sub.isConge && sub.conge && 
+          congeStatus === 'Rejeté' && !sub.valideService;
+        
+        // Si les deux types sont rejetés par le service, ne pas garder la soumission
+        if (primeRejectedByService && congeRejectedByService) {
+          console.log('🚫 Soumission exclue (les deux types rejetés par le service):', sub.id);
+          return false; // Les deux sont rejetés par le service, ne pas garder
+        }
+        
+        // Si Prime est rejeté par le service, vérifier si Congé est encore en attente
+        if (primeRejectedByService) {
+          // Si Congé est "Soumis" ou "Modifié", il est encore en attente → garder la soumission
+          if (sub.isConge && sub.conge && (congeStatus === 'Soumis' || congeStatus === 'Modifié')) {
+            return true;
+          }
+          // Si Congé est aussi rejeté, vérifier s'il était rejeté par la division
+          // Si Congé est rejeté ET a un commentaire, alors il était probablement rejeté par la division
+          // (car le commentaire de la division est toujours présent, même après que valideService soit mis à false)
+          if (sub.isConge && sub.conge && congeStatus === 'Rejeté' && sub.conge.commentaire) {
+            return true; // Congé était probablement rejeté par la division (a un commentaire), garder la soumission
+          }
+          // Si Congé est rejeté mais n'a pas de commentaire, ne pas garder (les deux sont rejetés par le service)
+          console.log('🚫 Soumission exclue (Prime rejeté par service, Congé aussi rejeté par service):', sub.id);
+          return false;
+        }
+        
+        // Si Congé est rejeté par le service, vérifier si Prime est encore en attente
+        if (congeRejectedByService) {
+          // Si Prime est "Soumis" ou "Modifié", il est encore en attente → garder la soumission
+          if (sub.isPrime && sub.prime && (primeStatus === 'Soumis' || primeStatus === 'Modifié')) {
+            return true;
+          }
+          // Si Prime est aussi rejeté, vérifier s'il était rejeté par la division
+          // Si Prime est rejeté ET a un commentaire, alors il était probablement rejeté par la division
+          // (car le commentaire de la division est toujours présent, même après que valideService soit mis à false)
+          if (sub.isPrime && sub.prime && primeStatus === 'Rejeté' && sub.prime.commentaire) {
+            return true; // Prime était probablement rejeté par la division (a un commentaire), garder la soumission
+          }
+          // Si Prime est rejeté mais n'a pas de commentaire, ne pas garder (les deux sont rejetés par le service)
+          console.log('🚫 Soumission exclue (Congé rejeté par service, Prime aussi rejeté par service):', sub.id);
+          return false;
+        }
         
         // Garder la soumission si au moins un type est encore en attente ou rejeté par la division
         return hasPrimePending || hasCongePending;
@@ -112,6 +169,15 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       });
 
       console.log('✅ Soumissions chargées:', submittedSubmissions.length);
+      console.log('📊 Détail des soumissions filtrées:', submittedSubmissions.map(s => ({
+        id: s.id,
+        employee: s.employee?.nom,
+        primeStatus: s.prime?.statut,
+        congeStatus: s.conge?.statut,
+        valideService: s.valideService,
+        primeRejectedByService: s.isPrime && s.prime && s.prime.statut === 'Rejeté' && !s.valideService,
+        congeRejectedByService: s.isConge && s.conge && s.conge.statut === 'Rejeté' && !s.valideService
+      })));
       setSubmissions(submittedSubmissions);
     } catch (error) {
       console.error('❌ Erreur lors du chargement des soumissions:', error);
@@ -190,11 +256,18 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
     montant: report.montantTotal / 1000,
   }));
 
-  const handleValidation = (submission: EVPSubmission, action: 'approve' | 'reject', type?: 'Prime' | 'Congé') => {
+  const handleValidation = (submission: EVPSubmission, action: 'approve' | 'reject', type: 'Prime' | 'Congé') => {
+    console.log('🔘 handleValidation appelé:', { submissionId: submission.id, action, type });
+    if (!type) {
+      console.error('❌ ERREUR: Le type doit être spécifié!');
+      toast.error('Erreur: le type doit être spécifié');
+      return;
+    }
     setSelectedSubmission(submission);
     setValidationDialog(action);
     setComment('');
-    setValidationType(type || null);
+    setValidationType(type);
+    console.log('✅ Dialog ouvert, type:', type, 'validationType:', type);
   };
 
   const confirmValidation = async () => {
@@ -214,11 +287,43 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
         comment: validationDialog === 'reject' ? comment : undefined
       });
 
-      await validateEVPSubmission(selectedSubmission.id, validationDialog === 'approve' ? 'approve' : 'reject', {
+      // Pour le rejet, le type DOIT être spécifié
+      if (validationDialog === 'reject' && !validationType) {
+        toast.error('Erreur: le type (Prime ou Congé) doit être spécifié pour le rejet');
+        return;
+      }
+
+      const requestData: {
+        niveau: 'service';
+        commentaire?: string;
+        type?: 'Prime' | 'Congé';
+      } = {
         niveau: 'service',
-        commentaire: validationDialog === 'reject' ? comment : undefined,
-        type: validationType || undefined
+      };
+
+      if (validationDialog === 'reject') {
+        requestData.commentaire = comment;
+        // Le type est obligatoire pour le rejet
+        if (validationType) {
+          requestData.type = validationType;
+        } else {
+          toast.error('Erreur: le type (Prime ou Congé) doit être spécifié pour le rejet');
+          return;
+        }
+      } else if (validationType) {
+        // Pour l'approbation, le type est optionnel mais peut être fourni
+        requestData.type = validationType;
+      }
+
+      console.log('📤 Appel API validateEVPSubmission:', {
+        submissionId: selectedSubmission.id,
+        action: validationDialog,
+        requestData
       });
+
+      const response = await validateEVPSubmission(selectedSubmission.id, validationDialog === 'approve' ? 'approve' : 'reject', requestData);
+      
+      console.log('✅ Réponse API:', response);
 
       const actionText = validationDialog === 'approve' ? 'validé' : 'rejeté';
       const employee = selectedSubmission.employee;
@@ -237,7 +342,11 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       setValidationType(null);
 
       // Recharger les soumissions
+      console.log('🔄 Rechargement des soumissions...');
+      // Forcer le rechargement en vidant d'abord les soumissions
+      setSubmissions([]);
       await loadSubmissions();
+      console.log('✅ Soumissions rechargées');
     } catch (error) {
       console.error('❌ Erreur lors de la validation:', error);
       const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
@@ -318,8 +427,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
 
     // Filtre par type (Prime/Congé)
     if (historyTypeFilter === 'prime') {
-      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé
-      if (!sub.isPrime || !sub.prime || (sub.isConge && sub.conge)) return false;
+      // Garder les soumissions qui ont Prime (même si elles ont aussi Congé)
+      if (!sub.isPrime || !sub.prime) return false;
       
       // Si un filtre de statut est spécifié, vérifier le statut de la prime
       if (historyStatusFilter !== 'all') {
@@ -334,8 +443,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
       }
       return true;
     } else if (historyTypeFilter === 'conge') {
-      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime
-      if (!sub.isConge || !sub.conge || (sub.isPrime && sub.prime)) return false;
+      // Garder les soumissions qui ont Congé (même si elles ont aussi Prime)
+      if (!sub.isConge || !sub.conge) return false;
       
       // Si un filtre de statut est spécifié, vérifier le statut du congé
       if (historyStatusFilter !== 'all') {
@@ -469,17 +578,6 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
             <span className="flex-1 text-left">Historique</span>
           </button>
 
-          <button
-            onClick={() => setCurrentPage('reporting')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentPage === 'reporting'
-                ? 'bg-gradient-to-r from-emerald-700 to-emerald-800 text-white shadow-lg shadow-emerald-200'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="flex-1 text-left">Reporting</span>
-          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-200">
@@ -513,8 +611,7 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
               <Menu className="w-5 h-5" />
             </Button>
             <h2 className="text-xl text-slate-900">
-              {currentPage === 'validation' ? 'Validation Service' : 
-               currentPage === 'historique' ? 'Historique' : 'Reporting'}
+              {currentPage === 'validation' ? 'Validation Service' : 'Historique'}
             </h2>
           </div>
 
@@ -649,30 +746,96 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                               </td>
                             </tr>
                           ) : (
-                            filteredSubmissions.map((sub) => {
+                            filteredSubmissions
+                              .map((sub) => {
                               const employee = sub.employee;
                               const nomComplet = employee?.prenom ? `${employee.prenom} ${employee.nom}` : employee?.nom || '-';
                               
-                              // Type EVP - deux lignes empilées
+                              // Type EVP - ne garder que les types qui ne sont pas rejetés par le respo service
+                              // et qui ne sont pas déjà validés
                               const typeEVPItems = [];
-                              if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
-                              if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+                              
+                              // Prime : afficher seulement si statut = "Soumis", "Modifié" ou "Rejeté" par la division
+                              // EXCLURE si statut = "Rejeté" ET valideService = false (rejeté par le respo service)
+                              // EXCLURE si statut = "Validé Service", "Validé Division", "Validé" (déjà validé)
+                              if (sub.isPrime && sub.prime) {
+                                const primeStatus = sub.prime.statut;
+                                // Afficher si : Soumis, Modifié
+                                if (primeStatus === 'Soumis' || primeStatus === 'Modifié') {
+                                  typeEVPItems.push('Prime');
+                                } else if (primeStatus === 'Rejeté') {
+                                  // Si rejeté, vérifier si c'est un rejet par la division ou par le respo service
+                                  // Règle: 
+                                  // - Si valideService = true, c'est un rejet par la division → AFFICHER
+                                  // - Si valideService = false ET que l'autre type (Congé) est aussi rejeté ET a un commentaire,
+                                  //   alors Congé était rejeté par la division, donc Prime était aussi rejeté par la division → AFFICHER
+                                  // - Sinon (valideService = false), c'est un rejet par le respo service → NE PAS AFFICHER
+                                  if (sub.valideService) {
+                                    // valideService = true signifie que Prime était rejeté par la division
+                                    typeEVPItems.push('Prime');
+                                  } else if (sub.isConge && sub.conge && sub.conge.statut === 'Rejeté' && sub.conge.commentaire) {
+                                    // Si valideService = false mais que Congé est aussi rejeté ET a un commentaire,
+                                    // alors Congé était rejeté par la division (le commentaire vient de la division),
+                                    // donc Prime était aussi rejeté par la division avant → AFFICHER
+                                    typeEVPItems.push('Prime');
+                                  }
+                                  // Sinon (valideService = false ET Congé n'est pas rejeté ou n'a pas de commentaire),
+                                  // c'est un rejet par le respo service, ne pas afficher
+                                }
+                                // Ne pas afficher si : statut = "Validé Service", "Validé Division", "Validé"
+                                // (ces statuts ne sont pas dans les conditions ci-dessus, donc ils ne seront pas ajoutés)
+                              }
+                              // Congé : même logique
+                              if (sub.isConge && sub.conge) {
+                                const congeStatus = sub.conge.statut;
+                                if (congeStatus === 'Soumis' || congeStatus === 'Modifié') {
+                                  typeEVPItems.push('Congé');
+                                } else if (congeStatus === 'Rejeté') {
+                                  // Même logique que pour Prime
+                                  // Règle: 
+                                  // - Si valideService = true, c'est un rejet par la division → AFFICHER
+                                  // - Si valideService = false ET que l'autre type (Prime) est aussi rejeté ET a un commentaire,
+                                  //   alors Prime était rejeté par la division, donc Congé était aussi rejeté par la division → AFFICHER
+                                  // - Sinon (valideService = false), c'est un rejet par le respo service → NE PAS AFFICHER
+                                  if (sub.valideService) {
+                                    // valideService = true signifie que Congé était rejeté par la division
+                                    typeEVPItems.push('Congé');
+                                  } else if (sub.isPrime && sub.prime && sub.prime.statut === 'Rejeté' && sub.prime.commentaire) {
+                                    // Si valideService = false mais que Prime est aussi rejeté ET a un commentaire,
+                                    // alors Prime était rejeté par la division (le commentaire vient de la division),
+                                    // donc Congé était aussi rejeté par la division avant → AFFICHER
+                                    typeEVPItems.push('Congé');
+                                  }
+                                  // Sinon (valideService = false ET Prime n'est pas rejeté ou n'a pas de commentaire),
+                                  // c'est un rejet par le respo service, ne pas afficher
+                                }
+                                // Ne pas afficher si : statut = "Validé Service", "Validé Division", "Validé"
+                                // (ces statuts ne sont pas dans les conditions ci-dessus, donc ils ne seront pas ajoutés)
+                              }
+                              
+                              // Si aucun type n'est visible, ne pas afficher la ligne
+                              if (typeEVPItems.length === 0) {
+                                return null;
+                              }
 
-                              const montantPrime = sub.prime?.montantCalcule 
+                              // Afficher les montants seulement pour les types visibles
+                              const montantPrime = (typeEVPItems.includes('Prime') && sub.prime?.montantCalcule)
                                 ? (typeof sub.prime.montantCalcule === 'string' 
                                     ? parseFloat(sub.prime.montantCalcule) 
                                     : sub.prime.montantCalcule).toFixed(2)
                                 : '-';
                               
-                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                              const montantIndemnite = (typeEVPItems.includes('Congé') && sub.conge?.indemniteCalculee)
                                 ? (typeof sub.conge.indemniteCalculee === 'string' 
                                     ? parseFloat(sub.conge.indemniteCalculee) 
                                     : sub.conge.indemniteCalculee).toFixed(2)
                                 : '-';
 
-                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+                              const dureeConge = (typeEVPItems.includes('Congé') && sub.conge?.nombreJours) 
+                                ? `${sub.conge.nombreJours} jour(s)` 
+                                : '-';
 
-                              // Dates de soumission - deux lignes empilées
+                              // Dates de soumission - afficher seulement pour les types visibles
                               const formatDate = (dateStr: string | undefined) => {
                                 if (!dateStr) return null;
                                 return new Date(dateStr).toLocaleDateString('fr-FR', {
@@ -681,8 +844,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                   year: 'numeric'
                                 });
                               };
-                              const datePrime = formatDate(sub.prime?.submittedAt);
-                              const dateConge = formatDate(sub.conge?.submittedAt);
+                              const datePrime = typeEVPItems.includes('Prime') ? formatDate(sub.prime?.submittedAt) : null;
+                              const dateConge = typeEVPItems.includes('Congé') ? formatDate(sub.conge?.submittedAt) : null;
 
                               return (
                                 <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
@@ -723,8 +886,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                   </td>
                                   <td className="py-3 px-4">
                                     <div className="flex flex-col gap-2">
-                                      {/* Actions pour Prime - afficher si statut est "Soumis", "Modifié" ou "Rejeté" après validation service */}
-                                      {sub.isPrime && sub.prime && (sub.prime.statut === 'Soumis' || sub.prime.statut === 'Modifié' || (sub.prime.statut === 'Rejeté' && sub.valideService)) && (
+                                      {/* Actions pour Prime - afficher SEULEMENT si Prime est dans typeEVPItems (donc visible) */}
+                                      {typeEVPItems.includes('Prime') && sub.isPrime && sub.prime && (
                                         <div className="flex gap-2 mb-1">
                                           <Button
                                             size="sm"
@@ -745,8 +908,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                           </Button>
                                         </div>
                                       )}
-                                      {/* Actions pour Congé - afficher si statut est "Soumis", "Modifié" ou "Rejeté" après validation service */}
-                                      {sub.isConge && sub.conge && (sub.conge.statut === 'Soumis' || sub.conge.statut === 'Modifié' || (sub.conge.statut === 'Rejeté' && sub.valideService)) && (
+                                      {/* Actions pour Congé - afficher SEULEMENT si Congé est dans typeEVPItems (donc visible) */}
+                                      {typeEVPItems.includes('Congé') && sub.isConge && sub.conge && (
                                         <div className="flex gap-2">
                                           <Button
                                             size="sm"
@@ -767,9 +930,8 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                           </Button>
                                         </div>
                                       )}
-                                      {/* Si aucun type n'est en attente, afficher un message */}
-                                      {(!sub.isPrime || !sub.prime || (sub.prime.statut !== 'Soumis' && sub.prime.statut !== 'Modifié' && !(sub.prime.statut === 'Rejeté' && sub.valideService))) && 
-                                       (!sub.isConge || !sub.conge || (sub.conge.statut !== 'Soumis' && sub.conge.statut !== 'Modifié' && !(sub.conge.statut === 'Rejeté' && sub.valideService))) && (
+                                      {/* Si aucun type n'est visible, afficher un message */}
+                                      {typeEVPItems.length === 0 && (
                                         <span className="text-xs text-slate-400 italic">Tous validés</span>
                                       )}
                                     </div>
@@ -798,6 +960,7 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                 </tr>
                               );
                             })
+                              .filter(row => row !== null)
                           )}
                         </tbody>
                       </table>
@@ -897,23 +1060,34 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                               const nomComplet = employee?.prenom ? `${employee.prenom} ${employee.nom}` : employee?.nom || '-';
                               
                               // Type EVP - ne garder que les types qui ont un statut (traités)
+                              // Si un filtre de type est actif, n'afficher que ce type
                               const typeEVPItems = [];
-                              if (sub.isPrime && sub.prime && sub.prime.statut) typeEVPItems.push('Prime');
-                              if (sub.isConge && sub.conge && sub.conge.statut) typeEVPItems.push('Congé');
+                              if (historyTypeFilter === 'prime') {
+                                // Filtre Prime : n'afficher que Prime
+                                if (sub.isPrime && sub.prime && sub.prime.statut) typeEVPItems.push('Prime');
+                              } else if (historyTypeFilter === 'conge') {
+                                // Filtre Congé : n'afficher que Congé
+                                if (sub.isConge && sub.conge && sub.conge.statut) typeEVPItems.push('Congé');
+                              } else {
+                                // Filtre "Tous" : afficher tous les types traités
+                                if (sub.isPrime && sub.prime && sub.prime.statut) typeEVPItems.push('Prime');
+                                if (sub.isConge && sub.conge && sub.conge.statut) typeEVPItems.push('Congé');
+                              }
 
-                              const montantPrime = sub.prime?.montantCalcule 
+                              // Afficher les montants seulement pour le type sélectionné dans le filtre
+                              const montantPrime = (historyTypeFilter === 'prime' || historyTypeFilter === 'all') && sub.prime?.montantCalcule 
                                 ? (typeof sub.prime.montantCalcule === 'string' 
                                     ? parseFloat(sub.prime.montantCalcule) 
                                     : sub.prime.montantCalcule).toFixed(2)
                                 : '-';
                               
-                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                              const montantIndemnite = (historyTypeFilter === 'conge' || historyTypeFilter === 'all') && sub.conge?.indemniteCalculee 
                                 ? (typeof sub.conge.indemniteCalculee === 'string' 
                                     ? parseFloat(sub.conge.indemniteCalculee) 
                                     : sub.conge.indemniteCalculee).toFixed(2)
                                 : '-';
 
-                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+                              const dureeConge = (historyTypeFilter === 'conge' || historyTypeFilter === 'all') && sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
 
                               // Dates de soumission
                               const formatDate = (dateStr: string | undefined) => {
@@ -924,8 +1098,9 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                                   year: 'numeric'
                                 });
                               };
-                              const datePrime = formatDate(sub.prime?.submittedAt);
-                              const dateConge = formatDate(sub.conge?.submittedAt);
+                              // Afficher les dates seulement pour le type sélectionné dans le filtre
+                              const datePrime = (historyTypeFilter === 'prime' || historyTypeFilter === 'all') ? formatDate(sub.prime?.submittedAt) : null;
+                              const dateConge = (historyTypeFilter === 'conge' || historyTypeFilter === 'all') ? formatDate(sub.conge?.submittedAt) : null;
 
                               // Fonctions pour déterminer le statut dans l'historique
                               // "Validé" si validé par respo service
@@ -1060,199 +1235,18 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
                 </CardContent>
               </Card>
             </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h1 className="text-2xl text-slate-900">Reporting Historique - {user.division}</h1>
-                <div className="flex items-center gap-3">
-                  <Calendar className="w-5 h-5 text-slate-500" />
-                  <Select value={selectedMonth} onValueChange={setSelectedMonth}>
-                    <SelectTrigger className="w-64">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="recent">3 derniers mois</SelectItem>
-                      <SelectItem value="all">Tous les mois</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                <p className="text-sm text-blue-900">
-                  <strong>Info :</strong> Par défaut, les 3 derniers mois sont affichés. Utilisez le filtre ci-dessus pour consulter l'historique complet.
-                </p>
-              </div>
-
-              {/* Monthly Reports Table */}
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Historique mensuel des EVP</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Mois</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Total Payé (Primes)</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Nombre de Jours de Congés</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredReports.map((report, idx) => (
-                          <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-3 px-4">
-                              <span className="text-sm text-slate-900">{report.mois}</span>
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className="text-sm text-slate-900">{report.montantTotal.toLocaleString()} DH</span>
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className="text-sm text-slate-900">{report.joursConges} jours</span>
-                            </td>
-                            <td className="py-3 px-4">
-                              {getReportStatusBadge(report.statut)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Charts */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Évolution mensuelle (3 derniers mois)</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={recentMonthsData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="mois" stroke="#64748b" />
-                        <YAxis stroke="#64748b" />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: 'white',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: '8px',
-                          }}
-                        />
-                        <Legend />
-                        <Bar dataKey="montant" fill="#059669" name="Montant (K DH)" radius={[8, 8, 0, 0]} />
-                        <Bar dataKey="conges" fill="#3b82f6" name="Jours congés" radius={[8, 8, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Répartition par type d'EVP</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={typeDistribution}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, value }) => `${name}: ${value}%`}
-                          outerRadius={100}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          {typeDistribution.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Trend Chart for all months */}
-              {selectedMonth === 'all' && (
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Tendance sur 6 mois</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={monthlyTrendData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="mois" stroke="#64748b" />
-                        <YAxis stroke="#64748b" />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: 'white',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: '8px',
-                          }}
-                        />
-                        <Legend />
-                        <Line 
-                          type="monotone" 
-                          dataKey="montant" 
-                          stroke="#059669" 
-                          strokeWidth={3}
-                          name="Montant (K DH)" 
-                          dot={{ fill: '#059669', r: 5 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Summary Stats */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Card className="border-slate-200 bg-gradient-to-br from-emerald-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Moyenne mensuelle (primes)</p>
-                    <p className="text-3xl text-emerald-700 mb-1">
-                      {Math.round(monthlyReports.reduce((sum, r) => sum + r.montantTotal, 0) / monthlyReports.length).toLocaleString()} DH
-                    </p>
-                    <p className="text-xs text-slate-600">Sur {monthlyReports.length} mois</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-gradient-to-br from-blue-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Total congés (3 mois)</p>
-                    <p className="text-3xl text-blue-700 mb-1">
-                      {recentMonthsData.reduce((sum, r) => sum + r.conges, 0)} jours
-                    </p>
-                    <p className="text-xs text-slate-600">Octobre - Août 2025</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-gradient-to-br from-orange-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Performance validation</p>
-                    <p className="text-3xl text-orange-700 mb-1">Excellent</p>
-                    <p className="text-xs text-slate-600">Taux de validation: 95%</p>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          )}
+          ) : null}
         </main>
       </div>
 
       {/* Validation Dialog */}
-      <Dialog open={validationDialog !== null} onOpenChange={() => {
-        setValidationDialog(null);
-        setSelectedSubmission(null);
-        setComment('');
-        setValidationType(null);
+      <Dialog open={validationDialog !== null} onOpenChange={(open) => {
+        if (!open) {
+          setValidationDialog(null);
+          setSelectedSubmission(null);
+          setComment('');
+          setValidationType(null);
+        }
       }}>
         <DialogContent>
           <DialogHeader>
@@ -1294,7 +1288,15 @@ export default function ResponsableServicePage({ user, onLogout }: ResponsableSe
               Annuler
             </Button>
             <Button
-              onClick={confirmValidation}
+              onClick={() => {
+                console.log('🔘 Bouton Rejeter/Valider cliqué:', {
+                  validationDialog,
+                  validationType,
+                  comment: comment.trim(),
+                  selectedSubmissionId: selectedSubmission?.id
+                });
+                confirmValidation();
+              }}
               disabled={validationDialog === 'reject' && !comment.trim()}
               className={
                 validationDialog === 'approve'

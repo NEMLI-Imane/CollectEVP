@@ -1,0 +1,43 @@
+# Fichiers à exclure lors de la création du ZIP pour l'encadrant
+# Ces fichiers peuvent être régénérés après installation
+
+# Dépendances Node.js (sera réinstallé avec npm install)
+node_modules/
+
+# Dépendances PHP (sera réinstallé avec composer install)
+backend/vendor/
+
+# Build de production (sera régénéré avec npm run build)
+build/
+dist/
+
+# Cache Symfony (sera régénéré automatiquement)
+backend/var/cache/
+backend/var/log/
+
+# Base de données (sera recréée avec les migrations)
+backend/var/data.db
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Git
+.git/
+.gitignore
+
+# Docker (optionnel, peut être inclus si nécessaire)
+docker/
+
+# Fichiers temporaires
+*.tmp
+*.log
+

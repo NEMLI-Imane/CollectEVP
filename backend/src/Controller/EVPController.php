@@ -933,27 +933,45 @@ class EVPController extends AbstractController
                         }
                     }
                 } else {
-                    // Rejet
-                    // Si un type spécifique est fourni, rejeter uniquement ce type
-                    if ($type === 'Prime' && $submission->isPrime() && $submission->getPrime()) {
+                    // Rejet par le respo service
+                    // Le type DOIT être spécifié pour rejeter un type spécifique
+                    if (!$type || ($type !== 'Prime' && $type !== 'Congé')) {
+                        return new JsonResponse(['error' => 'Type is required for rejection at service level. Specify "Prime" or "Congé".'], Response::HTTP_BAD_REQUEST);
+                    }
+                    
+                    error_log("Rejet service - Type spécifié: {$type}, Submission ID: {$id}");
+                    
+                    // Si un type spécifique est fourni, rejeter UNIQUEMENT ce type
+                    if ($type === 'Prime') {
+                        if (!$submission->isPrime() || !$submission->getPrime()) {
+                            return new JsonResponse(['error' => 'Prime type not present in this submission'], Response::HTTP_BAD_REQUEST);
+                        }
+                        // Rejeter UNIQUEMENT Prime
                         $submission->getPrime()->setStatut('Rejeté');
                         $submission->getPrime()->setCommentaire($commentaire);
-                        // Si on rejette, on peut mettre valideService à false seulement si tous les types sont rejetés
-                        // Pour l'instant, on garde la logique simple
-                    } elseif ($type === 'Congé' && $submission->isConge() && $submission->getConge()) {
+                        error_log("Prime rejetée par le service - Statut: Rejeté");
+                        
+                        // NE PAS modifier Congé - laisser son statut tel quel
+                        // Toujours mettre valideService à false quand on rejette un type au niveau service
+                        // Le frontend détectera si l'autre type était rejeté par la division en vérifiant
+                        // si l'autre type est aussi rejeté ET a un commentaire (indique qu'il était rejeté par la division)
+                        $submission->setValideService(false);
+                        error_log("valideService mis à false après rejet de Prime");
+                    } elseif ($type === 'Congé') {
+                        if (!$submission->isConge() || !$submission->getConge()) {
+                            return new JsonResponse(['error' => 'Congé type not present in this submission'], Response::HTTP_BAD_REQUEST);
+                        }
+                        // Rejeter UNIQUEMENT Congé
                         $submission->getConge()->setStatut('Rejeté');
                         $submission->getConge()->setCommentaire($commentaire);
-                    } elseif (!$type) {
-                        // Si aucun type n'est spécifié, rejeter tous les types présents
+                        error_log("Congé rejeté par le service - Statut: Rejeté");
+                        
+                        // NE PAS modifier Prime - laisser son statut tel quel
+                        // Toujours mettre valideService à false quand on rejette un type au niveau service
+                        // Le frontend détectera si l'autre type était rejeté par la division en vérifiant
+                        // si l'autre type est aussi rejeté ET a un commentaire (indique qu'il était rejeté par la division)
                         $submission->setValideService(false);
-                        if ($submission->isPrime() && $submission->getPrime()) {
-                            $submission->getPrime()->setStatut('Rejeté');
-                            $submission->getPrime()->setCommentaire($commentaire);
-                        }
-                        if ($submission->isConge() && $submission->getConge()) {
-                            $submission->getConge()->setStatut('Rejeté');
-                            $submission->getConge()->setCommentaire($commentaire);
-                        }
+                        error_log("valideService mis à false après rejet de Congé");
                     }
                 }
             } elseif ($niveau === 'division') {

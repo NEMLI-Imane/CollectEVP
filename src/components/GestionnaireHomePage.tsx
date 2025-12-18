@@ -194,11 +194,21 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
           if (currentTab === 'prime' && sub.isPrime && sub.prime) {
             const statut = sub.prime.statut || '';
             // Inclure uniquement les soumissions en attente ou rejetées (pas "Modifié" qui est déjà soumis)
-            return !statut || statut === 'En attente' || statut === 'Rejeté' || statut === null;
+            // Ne pas inclure les rejets par la division (valideService = true)
+            // Seulement inclure les rejets par le respo service (valideService = false)
+            if (statut === 'Rejeté') {
+              return !sub.valideService; // Seulement si rejeté par le respo service
+            }
+            return !statut || statut === 'En attente' || statut === null;
           } else if (currentTab === 'conge' && sub.isConge && sub.conge) {
             const statut = sub.conge.statut || '';
             // Inclure uniquement les soumissions en attente ou rejetées (pas "Modifié" qui est déjà soumis)
-            return !statut || statut === 'En attente' || statut === 'Rejeté' || statut === null;
+            // Ne pas inclure les rejets par la division (valideService = true)
+            // Seulement inclure les rejets par le respo service (valideService = false)
+            if (statut === 'Rejeté') {
+              return !sub.valideService; // Seulement si rejeté par le respo service
+            }
+            return !statut || statut === 'En attente' || statut === null;
           }
           return false;
         }
@@ -264,11 +274,23 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
             : (congeData?.statut === 'Soumis' || congeData?.statut === 'Modifié' || congeData?.statut === 'Validé Service' || congeData?.statut === 'Validé Division' || congeData?.statut === 'Validé' || false);
           
           // Si rejeté, ne pas considérer comme soumis (pour qu'il réapparaisse dans le tableau de saisie)
+          // MAIS seulement si c'est un rejet par le respo service (valideService = false)
+          // Si c'est un rejet par la division (valideService = true), ne PAS l'afficher chez le gestionnaire
           if (currentTab === 'prime' && primeData?.statut === 'Rejeté') {
-            isSubmitted = false;
+            // Si rejeté par la division (valideService = true), ne pas afficher chez le gestionnaire
+            if (submission.valideService) {
+              isSubmitted = true; // Considérer comme soumis pour ne pas l'afficher
+            } else {
+              isSubmitted = false; // Rejeté par le respo service, réafficher chez le gestionnaire
+            }
           }
           if (currentTab === 'conge' && congeData?.statut === 'Rejeté') {
-            isSubmitted = false;
+            // Si rejeté par la division (valideService = true), ne pas afficher chez le gestionnaire
+            if (submission.valideService) {
+              isSubmitted = true; // Considérer comme soumis pour ne pas l'afficher
+            } else {
+              isSubmitted = false; // Rejeté par le respo service, réafficher chez le gestionnaire
+            }
           }
           
           return {
@@ -383,6 +405,13 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
     return false;
   }).length;
 
+  // Compter les employés avec des données dans le tableau (pour activer les boutons)
+  const employeesWithDataCount = employees.filter(e => {
+    if (saisieTab === 'prime') return e.primeData;
+    if (saisieTab === 'conge') return e.congeData;
+    return e.primeData || e.congeData;
+  }).length;
+
   // Fonction pour charger les soumissions historiques (soumises, validées, rejetées)
   const loadHistoricalSubmissions = async () => {
     try {
@@ -456,8 +485,8 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
 
     // Filtre par type (Prime/Congé)
     if (historyTypeFilter === 'prime') {
-      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé
-      if (!sub.isPrime || !sub.prime || (sub.isConge && sub.conge)) return false;
+      // Garder les soumissions qui ont Prime (même si elles ont aussi Congé)
+      if (!sub.isPrime || !sub.prime) return false;
       
       // Filtre par statut si spécifié
       if (historyStatusFilter !== 'all') {
@@ -466,8 +495,8 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       }
       return true;
     } else if (historyTypeFilter === 'conge') {
-      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime
-      if (!sub.isConge || !sub.conge || (sub.isPrime && sub.prime)) return false;
+      // Garder les soumissions qui ont Congé (même si elles ont aussi Prime)
+      if (!sub.isConge || !sub.conge) return false;
       
       // Filtre par statut si spécifié
       if (historyStatusFilter !== 'all') {
@@ -476,13 +505,18 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       }
       return true;
     } else {
-      // Filtre "Tous les EVP" - si un filtre de statut est spécifié, vérifier que TOUS les types présents correspondent
+      // Filtre "Tous les EVP" - si un filtre de statut est spécifié
       if (historyStatusFilter !== 'all') {
         const primeStatus = getPrimeStatusDisplay();
         const congeStatus = getCongeStatusDisplay();
         
-        // Si la demande a Prime ET Congé, les deux doivent avoir le statut sélectionné
+        // Si la demande a Prime ET Congé
         if (sub.isPrime && sub.prime && sub.isConge && sub.conge) {
+          // Pour "a_revoir", afficher si AU MOINS UN des deux est "a_revoir"
+          if (historyStatusFilter === 'a_revoir') {
+            return primeStatus === 'a_revoir' || congeStatus === 'a_revoir';
+          }
+          // Pour les autres statuts, les deux doivent avoir le statut sélectionné
           return primeStatus === historyStatusFilter && congeStatus === historyStatusFilter;
         }
         // Si seulement Prime, vérifier Prime
@@ -879,7 +913,12 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
 
   const submitAll = async () => {
     try {
-      const employeesWithData = employees.filter(e => e.primeData || e.congeData);
+      // Filtrer les employés avec des données selon l'onglet actif
+      const employeesWithData = employees.filter(e => {
+        if (saisieTab === 'prime') return e.primeData;
+        if (saisieTab === 'conge') return e.congeData;
+        return e.primeData || e.congeData;
+      });
 
       if (employeesWithData.length === 0) {
         toast.error('Aucune donnée à soumettre');
@@ -890,7 +929,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
       console.log(`📤 Soumission de ${employeesWithData.length} employé(s)...`);
       const updatePromises = employeesWithData.map(emp => {
         // Récupérer la soumission actuelle pour vérifier le statut précédent
-        const currentSubmission = allSubmissions.find((sub: EVPSubmission) => sub.id === emp.id);
+        const currentSubmission = allSubmissions.find((sub: EVPSubmission) => sub.employee?.id === emp.id);
         const previousStatutPrime = currentSubmission?.prime?.statut;
         const previousStatutConge = currentSubmission?.conge?.statut;
         
@@ -903,7 +942,11 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
         const newStatutPrime = isFirstSubmissionPrime ? 'Soumis' : 'Modifié';
         const newStatutConge = isFirstSubmissionConge ? 'Soumis' : 'Modifié';
         
-        if (saisieTab === 'prime' && emp.primeData) {
+        // Préparer les données à soumettre
+        const updateData: any = {};
+        
+        // Si l'employé a des données Prime, les inclure
+        if (emp.primeData) {
           const primeUpdateData: any = {
             ...emp.primeData,
             statut: newStatutPrime,
@@ -913,8 +956,11 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
           if (newStatutPrime === 'Modifié') {
             primeUpdateData.commentaire = null;
           }
-          return updateEVPSubmission(emp.id, { prime: primeUpdateData });
-        } else if (saisieTab === 'conge' && emp.congeData) {
+          updateData.prime = primeUpdateData;
+        }
+        
+        // Si l'employé a des données Congé, les inclure
+        if (emp.congeData) {
           const congeUpdateData: any = {
             ...emp.congeData,
             statut: newStatutConge,
@@ -931,15 +977,43 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
           if (congeUpdateData.dateFin instanceof Date) {
             congeUpdateData.dateFin = congeUpdateData.dateFin.toISOString().split('T')[0];
           }
-          return updateEVPSubmission(emp.id, { conge: congeUpdateData });
+          updateData.conge = congeUpdateData;
+        }
+        
+        // Soumettre les données (Prime, Congé, ou les deux)
+        if (updateData.prime || updateData.conge) {
+          return updateEVPSubmission(emp.id, updateData);
         }
         return Promise.resolve();
       });
       await Promise.all(updatePromises);
       console.log('✅ Toutes les soumissions mises à jour dans la base de données');
 
-      // Retirer tous les employés avec données de la liste après soumission
-      setEmployees(employees.filter(emp => !emp.primeData && !emp.congeData));
+      // Retirer les données soumises des employés dans le tableau
+      setEmployees(prevEmployees => {
+        return prevEmployees.map(emp => {
+          const employeeWithData = employeesWithData.find(e => e.id === emp.id);
+          if (employeeWithData) {
+            // Retirer les données soumises selon l'onglet actif
+            if (saisieTab === 'prime' && emp.primeData) {
+              // Si l'employé a encore des données Congé, on le garde avec seulement congeData
+              if (emp.congeData) {
+                return { ...emp, primeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            } else if (saisieTab === 'conge' && emp.congeData) {
+              // Si l'employé a encore des données Prime, on le garde avec seulement primeData
+              if (emp.primeData) {
+                return { ...emp, congeData: null };
+              }
+              // Sinon, on le retire complètement du tableau
+              return null;
+            }
+          }
+          return emp;
+        }).filter(emp => emp !== null) as EmployeeEVP[];
+      });
 
       toast.success('Toutes les données ont été transmises pour validation hiérarchique', {
         description: `${employeesWithData.length} employé(s) soumis`,
@@ -1550,7 +1624,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                       <Button
                         onClick={submitAll}
                         className="bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800"
-                        disabled={pendingCount === 0}
+                        disabled={employeesWithDataCount === 0}
                       >
                         <Send className="w-4 h-4 mr-2" />
                         Soumettre tout pour validation
@@ -1559,7 +1633,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                         onClick={deleteAll}
                         variant="destructive"
                         className="bg-red-600 hover:bg-red-700"
-                        disabled={pendingCount === 0}
+                        disabled={employeesWithDataCount === 0}
                       >
                         <Trash2 className="w-4 h-4 mr-2" />
                         Supprimer tout
@@ -1602,67 +1676,71 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                             </td>
                           </tr>
                         ) : (
-                          employees.map((employee) => (
-                          <tr key={employee.id} className="border-b border-slate-100 hover:bg-slate-50">
-                            <td className="py-3 px-4">
-                              <Badge variant="outline" className="border-emerald-200 text-emerald-700">
-                                {employee.matricule}
-                              </Badge>
-                            </td>
-                            <td className="py-3 px-4 text-sm text-slate-900">{employee.nom}</td>
-                            <td className="py-3 px-4 text-sm text-slate-600">{employee.poste}</td>
-                            <td className="py-3 px-4">
-                              {saisieTab === 'prime' ? (
-                                <Button
-                                  size="sm"
-                                  onClick={() => openPrimeDialog(employee)}
-                                  className="bg-emerald-600 hover:bg-emerald-700 h-8"
-                                >
-                                  <Award className="w-3 h-3 mr-1" />
-                                  Prime
-                                </Button>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  onClick={() => openCongeDialog(employee)}
-                                  className="bg-blue-600 hover:bg-blue-700 h-8"
-                                >
-                                  <CalendarDays className="w-3 h-3 mr-1" />
-                                  Congé
-                                </Button>
-                              )}
-                            </td>
-                            <td className="py-3 px-4">
-                              <span className="text-sm text-slate-900">
-                                {saisieTab === 'prime' 
-                                  ? (employee.primeData ? `${employee.primeData.montantCalcule.toLocaleString()} DH` : '-')
-                                  : (employee.congeData ? `${employee.congeData.indemniteCalculee.toLocaleString()} DH` : '-')
-                                }
-                              </span>
-                            </td>
-                            <td className="py-3 px-4">
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  onClick={() => submitEmployee(employee.id)}
-                                  className="bg-emerald-600 hover:bg-emerald-700 h-8"
-                                  disabled={!employee.primeData && !employee.congeData}
-                                >
-                                  Soumettre
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => deleteEmployee(employee.id)}
-                                  variant="destructive"
-                                  className="bg-red-600 hover:bg-red-700 h-8"
-                                  disabled={!employee.primeData && !employee.congeData}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                          ))
+                          employees.map((employee) => {
+                            // Trouver la soumission correspondante pour récupérer les commentaires
+                            const submission = allSubmissions.find((sub: EVPSubmission) => sub.id === employee.id);
+                            return (
+                            <tr key={employee.id} className="border-b border-slate-100 hover:bg-slate-50">
+                              <td className="py-3 px-4">
+                                <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                                  {employee.matricule}
+                                </Badge>
+                              </td>
+                              <td className="py-3 px-4 text-sm text-slate-900">{employee.nom}</td>
+                              <td className="py-3 px-4 text-sm text-slate-600">{employee.poste}</td>
+                              <td className="py-3 px-4">
+                                {saisieTab === 'prime' ? (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => openPrimeDialog(employee)}
+                                    className="bg-emerald-600 hover:bg-emerald-700 h-8"
+                                  >
+                                    <Award className="w-3 h-3 mr-1" />
+                                    Prime
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => openCongeDialog(employee)}
+                                    className="bg-blue-600 hover:bg-blue-700 h-8"
+                                  >
+                                    <CalendarDays className="w-3 h-3 mr-1" />
+                                    Congé
+                                  </Button>
+                                )}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="text-sm text-slate-900">
+                                  {saisieTab === 'prime' 
+                                    ? (employee.primeData ? `${employee.primeData.montantCalcule.toLocaleString()} DH` : '-')
+                                    : (employee.congeData ? `${employee.congeData.indemniteCalculee.toLocaleString()} DH` : '-')
+                                  }
+                                </span>
+                              </td>
+                              <td className="py-3 px-4">
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => submitEmployee(employee.id)}
+                                    className="bg-emerald-600 hover:bg-emerald-700 h-8"
+                                    disabled={!employee.primeData && !employee.congeData}
+                                  >
+                                    Soumettre
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => deleteEmployee(employee.id)}
+                                    variant="destructive"
+                                    className="bg-red-600 hover:bg-red-700 h-8"
+                                    disabled={!employee.primeData && !employee.congeData}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -1799,31 +1877,68 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                 year: 'numeric'
                               });
                             };
-                            const datePrime = formatDate(submission.prime?.submittedAt);
-                            const dateConge = formatDate(submission.conge?.submittedAt);
-                            
-                            // Traiter Prime
-                            if (submission.isPrime && submission.prime) {
-                              types.push('Prime');
-                              montantPrime = submission.prime.montantCalcule 
-                                ? (typeof submission.prime.montantCalcule === 'string' 
-                                    ? parseFloat(submission.prime.montantCalcule) 
-                                    : submission.prime.montantCalcule)
-                                : '-';
+                            // Fonction pour déterminer le statut affiché pour Prime
+                            const getPrimeStatusDisplay = () => {
+                              if (!submission.isPrime || !submission.prime) return null;
+                              if (submission.prime.statut === 'Rejeté') return 'a_revoir';
+                              if (submission.prime.statut === 'Modifié') return 'modifié';
+                              if (submission.prime.submittedAt) return 'soumis';
+                              return null;
+                            };
+
+                            // Fonction pour déterminer le statut affiché pour Congé
+                            const getCongeStatusDisplay = () => {
+                              if (!submission.isConge || !submission.conge) return null;
+                              if (submission.conge.statut === 'Rejeté') return 'a_revoir';
+                              if (submission.conge.statut === 'Modifié') return 'modifié';
+                              if (submission.conge.submittedAt) return 'soumis';
+                              return null;
+                            };
+
+                            // Variables pour suivre quels types sont affichés
+                            let showPrime = false;
+                            let showConge = false;
+
+                            // Traiter Prime - seulement si filtre Prime ou Tous
+                            if (historyTypeFilter === 'prime' || historyTypeFilter === 'all') {
+                              if (submission.isPrime && submission.prime) {
+                                const primeStatus = getPrimeStatusDisplay();
+                                // Si un filtre de statut est actif, vérifier que Prime correspond
+                                if (historyStatusFilter === 'all' || primeStatus === historyStatusFilter) {
+                                  types.push('Prime');
+                                  showPrime = true;
+                                  montantPrime = submission.prime.montantCalcule 
+                                    ? (typeof submission.prime.montantCalcule === 'string' 
+                                        ? parseFloat(submission.prime.montantCalcule) 
+                                        : submission.prime.montantCalcule)
+                                    : '-';
+                                }
+                              }
                             }
                             
-                            // Traiter Congé
-                            if (submission.isConge && submission.conge) {
-                              types.push('Congé');
-                              montantIndemnite = submission.conge.indemniteCalculee 
-                                ? (typeof submission.conge.indemniteCalculee === 'string' 
-                                    ? parseFloat(submission.conge.indemniteCalculee) 
-                                    : submission.conge.indemniteCalculee)
-                                : '-';
-                              dureeConge = submission.conge.nombreJours 
-                                ? `${submission.conge.nombreJours} jour(s)`
-                                : '-';
+                            // Traiter Congé - seulement si filtre Congé ou Tous
+                            if (historyTypeFilter === 'conge' || historyTypeFilter === 'all') {
+                              if (submission.isConge && submission.conge) {
+                                const congeStatus = getCongeStatusDisplay();
+                                // Si un filtre de statut est actif, vérifier que Congé correspond
+                                if (historyStatusFilter === 'all' || congeStatus === historyStatusFilter) {
+                                  types.push('Congé');
+                                  showConge = true;
+                                  montantIndemnite = submission.conge.indemniteCalculee 
+                                    ? (typeof submission.conge.indemniteCalculee === 'string' 
+                                        ? parseFloat(submission.conge.indemniteCalculee) 
+                                        : submission.conge.indemniteCalculee)
+                                    : '-';
+                                  dureeConge = submission.conge.nombreJours 
+                                    ? `${submission.conge.nombreJours} jour(s)`
+                                    : '-';
+                                }
+                              }
                             }
+
+                            // Afficher les dates seulement pour les types affichés
+                            const datePrime = showPrime ? formatDate(submission.prime?.submittedAt) : null;
+                            const dateConge = showConge ? formatDate(submission.conge?.submittedAt) : null;
                             
                             // Si aucun type, afficher "-" pour Type EVP
                             if (types.length === 0) {
@@ -1867,10 +1982,6 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                               return 'En attente';
                             };
 
-                            // Commentaires - combiner Prime et Congé
-                            const commentairePrime = submission.prime?.commentaire || null;
-                            const commentaireConge = submission.conge?.commentaire || null;
-                            
                             return (
                               <tr key={submission.id} className="border-b border-slate-100 hover:bg-slate-50">
                                 <td className="py-3 px-4">
@@ -1899,12 +2010,12 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                   </div>
                                 </td>
                                 <td className="py-3 px-4 text-sm text-slate-900">
-                                  {montantPrime !== '-' ? `${typeof montantPrime === 'number' ? montantPrime.toLocaleString('fr-FR') : montantPrime} DH` : '-'}
+                                  {showPrime && montantPrime !== '-' ? `${typeof montantPrime === 'number' ? montantPrime.toLocaleString('fr-FR') : montantPrime} DH` : '-'}
                                 </td>
                                 <td className="py-3 px-4 text-sm text-slate-900">
-                                  {montantIndemnite !== '-' ? `${typeof montantIndemnite === 'number' ? montantIndemnite.toLocaleString('fr-FR') : montantIndemnite} DH` : '-'}
+                                  {showConge && montantIndemnite !== '-' ? `${typeof montantIndemnite === 'number' ? montantIndemnite.toLocaleString('fr-FR') : montantIndemnite} DH` : '-'}
                                 </td>
-                                <td className="py-3 px-4 text-sm text-slate-600">{dureeConge || '-'}</td>
+                                <td className="py-3 px-4 text-sm text-slate-600">{showConge && dureeConge ? dureeConge : '-'}</td>
                                 <td className="py-3 px-4">
                                   <div className="flex flex-col gap-1 text-sm text-slate-600">
                                     {datePrime && (
@@ -1919,7 +2030,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                 {/* Colonne Statut */}
                                 <td className="py-3 px-4">
                                   <div className="flex flex-col gap-1">
-                                    {submission.isPrime && submission.prime && (
+                                    {showPrime && submission.prime && (
                                       <div className="mb-1">
                                         {submission.prime.statut === 'Rejeté' ? (
                                           <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">A revoir</Badge>
@@ -1932,7 +2043,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     )}
-                                    {submission.isConge && submission.conge && (
+                                    {showConge && submission.conge && (
                                       <div>
                                         {submission.conge.statut === 'Rejeté' ? (
                                           <Badge className="bg-orange-100 text-orange-700 border-orange-200 text-xs">A revoir</Badge>
@@ -1945,7 +2056,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     )}
-                                    {!submission.isPrime && !submission.isConge && (
+                                    {!showPrime && !showConge && (
                                       <span className="text-slate-400 text-xs">-</span>
                                     )}
                                   </div>
@@ -1953,7 +2064,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                 {/* Colonne Service */}
                                 <td className="py-3 px-4">
                                   <div className="flex flex-col gap-1">
-                                    {submission.isPrime && submission.prime ? (
+                                    {showPrime && submission.prime ? (
                                       <div className="mb-1">
                                         {getPrimeServiceResponse() === 'Validée' ? (
                                           <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1966,7 +2077,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     ) : null}
-                                    {submission.isConge && submission.conge ? (
+                                    {showConge && submission.conge ? (
                                       <div>
                                         {getCongeServiceResponse() === 'Validée' ? (
                                           <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1979,7 +2090,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     ) : null}
-                                    {!submission.isPrime && !submission.isConge && (
+                                    {!showPrime && !showConge && (
                                       <span className="text-slate-400 text-xs">-</span>
                                     )}
                                   </div>
@@ -1987,7 +2098,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                 {/* Colonne Division */}
                                 <td className="py-3 px-4">
                                   <div className="flex flex-col gap-1">
-                                    {submission.isPrime && submission.prime ? (
+                                    {showPrime && submission.prime ? (
                                       <div className="mb-1">
                                         {getPrimeDivisionResponse() === 'Validée' ? (
                                           <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1998,7 +2109,7 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     ) : null}
-                                    {submission.isConge && submission.conge ? (
+                                    {showConge && submission.conge ? (
                                       <div>
                                         {getCongeDivisionResponse() === 'Validée' ? (
                                           <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -2009,32 +2120,40 @@ export default function GestionnaireHomePage({ user, onLogout }: GestionnaireHom
                                         )}
                                       </div>
                                     ) : null}
-                                    {!submission.isPrime && !submission.isConge && (
+                                    {!showPrime && !showConge && (
                                       <span className="text-slate-400 text-xs">-</span>
                                     )}
                                   </div>
                                 </td>
+                                {/* Colonne Commentaire */}
                                 <td className="py-3 px-4">
-                                  <div className="flex flex-col gap-1 text-sm text-slate-600 italic">
-                                    {/* Prime en haut - afficher le commentaire même si validé */}
-                                    {commentairePrime ? (
-                                      <div>
-                                        <span className={submission.prime?.statut === 'Rejeté' ? 'text-red-600' : 'text-slate-600'}>{commentairePrime}</span>
+                                  <div className="flex flex-col gap-1">
+                                    {showPrime && submission.prime ? (
+                                      <div className="mb-1">
+                                        {/* Afficher le commentaire uniquement si rejeté par le service (statut = 'Rejeté' ET valideService = false) */}
+                                        {submission.prime.statut === 'Rejeté' && !submission.valideService && submission.prime.commentaire ? (
+                                          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 max-w-xs break-words">
+                                            {submission.prime.commentaire}
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-400 text-xs">-</span>
+                                        )}
                                       </div>
-                                    ) : submission.isPrime && submission.prime ? (
-                                      <span className="text-slate-400">-</span>
                                     ) : null}
-                                    {/* Congé en bas - afficher le commentaire même si validé */}
-                                    {commentaireConge ? (
+                                    {showConge && submission.conge ? (
                                       <div>
-                                        <span className={submission.conge?.statut === 'Rejeté' ? 'text-red-600' : 'text-slate-600'}>{commentaireConge}</span>
+                                        {/* Afficher le commentaire uniquement si rejeté par le service (statut = 'Rejeté' ET valideService = false) */}
+                                        {submission.conge.statut === 'Rejeté' && !submission.valideService && submission.conge.commentaire ? (
+                                          <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 max-w-xs break-words">
+                                            {submission.conge.commentaire}
+                                          </div>
+                                        ) : (
+                                          <span className="text-slate-400 text-xs">-</span>
+                                        )}
                                       </div>
-                                    ) : submission.isConge && submission.conge ? (
-                                      <span className="text-slate-400">-</span>
                                     ) : null}
-                                    {/* Si aucun type EVP, afficher "-" */}
-                                    {!submission.isPrime && !submission.isConge && (
-                                      <span className="text-slate-400">-</span>
+                                    {!showPrime && !showConge && (
+                                      <span className="text-slate-400 text-xs">-</span>
                                     )}
                                   </div>
                                 </td>

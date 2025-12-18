@@ -132,19 +132,20 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-slate-700">Mot de passe</Label>
                 <div className="relative">
-                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <Input
                     id="password"
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="pl-12 pr-12 h-14 rounded-xl border-slate-300 focus:border-emerald-500 focus:ring-emerald-500"
+                    className="pl-4 pr-12 h-14 rounded-xl border-slate-300 focus:border-emerald-500 focus:ring-emerald-500"
+                    autoComplete="current-password"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors z-10"
+                    aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
                   >
                     {showPassword ? (
                       <EyeOff className="w-5 h-5" />

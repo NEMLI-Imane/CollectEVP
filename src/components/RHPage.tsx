@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Switch } from './ui/switch';
-import { LayoutDashboard, FileText, Download, Database, LogOut, CheckCircle2, Search, Menu, Users, UserPlus, MessageSquarePlus, Edit, Trash2 } from 'lucide-react';
+import { FileText, Download, Database, LogOut, CheckCircle2, Search, Menu, Users, UserPlus, MessageSquarePlus, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getEmployees, createEmployee, updateEmployee, deleteEmployee, Employee, getEmployeeRequests, processEmployeeRequest, EmployeeRequest, getEVPSubmissions, EVPSubmission } from '../services/api';
 import {
@@ -30,25 +30,10 @@ interface RHPageProps {
   onLogout: () => void;
 }
 
-interface EVPRecord {
-  id: number;
-  matricule: string;
-  employee: string;
-  division: string;
-  service: string;
-  type: string;
-  amount: string;
-  submittedDate: string;
-  validatedDate: string;
-  status: 'pending' | 'validated' | 'rejected';
-  validatedBy: string;
-}
-
-
 // ManagerRequest interface is now using EmployeeRequest from API
 
 export default function RHPage({ user, onLogout }: RHPageProps) {
-  const [currentPage, setCurrentPage] = useState<'dashboard' | 'reporting' | 'export' | 'settings' | 'employees' | 'requests'>('dashboard');
+  const [currentPage, setCurrentPage] = useState<'reporting' | 'export' | 'employees' | 'requests'>('reporting');
   const [exportView, setExportView] = useState<'primes' | 'conges'>('primes');
   const [exportData, setExportData] = useState<EVPSubmission[]>([]);
   const [loadingExport, setLoadingExport] = useState(false);
@@ -277,11 +262,11 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     // Filtre par type (Prime/Congé)
     let matchesType = true;
     if (reportingFilterType === 'prime') {
-      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé
-      matchesType = sub.isPrime && sub.prime !== undefined && !(sub.isConge && sub.conge !== undefined);
+      // Garder les soumissions qui ont Prime (même si elles ont aussi Congé)
+      matchesType = sub.isPrime && sub.prime !== undefined;
     } else if (reportingFilterType === 'conge') {
-      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime
-      matchesType = sub.isConge && sub.conge !== undefined && !(sub.isPrime && sub.prime !== undefined);
+      // Garder les soumissions qui ont Congé (même si elles ont aussi Prime)
+      matchesType = sub.isConge && sub.conge !== undefined;
     }
 
     // Filtre par statut
@@ -325,14 +310,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     new Set(historicalSubmissions.map(sub => sub.submittedBy?.name).filter(Boolean))
   ).sort();
 
-  const records: EVPRecord[] = [
-    { id: 1, matricule: 'OCP001', employee: 'Khalid Mansouri', division: 'Production', service: 'Maintenance', type: 'Prime', amount: '2500 DH', submittedDate: '2025-10-10', validatedDate: '2025-10-11', status: 'validated', validatedBy: 'F. Alami' },
-    { id: 2, matricule: 'OCP002', employee: 'Salma Benjelloun', division: 'Production', service: 'Fabrication', type: 'Heures sup.', amount: '15h', submittedDate: '2025-10-10', validatedDate: '2025-10-12', status: 'validated', validatedBy: 'H. Mouhib' },
-    { id: 3, matricule: 'OCP003', employee: 'Youssef Kadiri', division: 'Qualité', service: 'Contrôle', type: 'Congé', amount: '3 jours', submittedDate: '2025-10-11', validatedDate: '', status: 'pending', validatedBy: '' },
-    { id: 4, matricule: 'OCP004', employee: 'Imane Semlali', division: 'Logistique', service: 'Expédition', type: 'Prime', amount: '3000 DH', submittedDate: '2025-10-11', validatedDate: '2025-10-12', status: 'validated', validatedBy: 'F. Alami' },
-    { id: 5, matricule: 'OCP005', employee: 'Rachid Bousfiha', division: 'Production', service: 'Maintenance', type: 'Absence', amount: '2 jours', submittedDate: '2025-10-12', validatedDate: '', status: 'rejected', validatedBy: 'F. Alami' },
-  ];
-
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -342,13 +319,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
       .slice(0, 2);
   };
 
-  const filteredRecords = records.filter(record => {
-    const matchesDivision = filterDivision === 'all' || record.division === filterDivision;
-    const matchesStatus = filterStatus === 'all' || record.status === filterStatus;
-    const matchesSearch = record.employee.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         record.matricule.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesDivision && matchesStatus && matchesSearch;
-  });
 
   const handleExportPDF = () => {
     toast.success('Export PDF lancé', {
@@ -619,11 +589,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
     }
   };
 
-  const totalRecords = records.length;
-  const validatedCount = records.filter(r => r.status === 'validated').length;
-  const pendingCount = records.filter(r => r.status === 'pending').length;
-  const rejectedCount = records.filter(r => r.status === 'rejected').length;
-
   return (
     <div className="flex h-screen bg-slate-50">
       {/* Sidebar */}
@@ -641,18 +606,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
         </div>
 
         <nav className="flex-1 p-4 space-y-1">
-          <button
-            onClick={() => setCurrentPage('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentPage === 'dashboard'
-                ? 'bg-gradient-to-r from-emerald-600 to-emerald-800 text-white shadow-lg shadow-emerald-200'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <LayoutDashboard className="w-5 h-5" />
-            <span className="flex-1 text-left">Tableau de bord RH</span>
-          </button>
-
           <button
             onClick={() => setCurrentPage('reporting')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
@@ -701,17 +654,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
             <span className="flex-1 text-left">Export</span>
           </button>
 
-          <button
-            onClick={() => setCurrentPage('settings')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentPage === 'settings'
-                ? 'bg-gradient-to-r from-emerald-600 to-emerald-800 text-white shadow-lg shadow-emerald-200'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <Database className="w-5 h-5" />
-            <span className="flex-1 text-left">Paramètres</span>
-          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-200">
@@ -745,12 +687,10 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
               <Menu className="w-5 h-5" />
             </Button>
             <h2 className="text-xl text-slate-900">
-              {currentPage === 'dashboard' && 'Tableau de bord RH'}
               {currentPage === 'reporting' && 'Reporting Global'}
               {currentPage === 'employees' && 'Gestion des Employés'}
               {currentPage === 'requests' && 'Demandes des Gestionnaires'}
               {currentPage === 'export' && 'Export'}
-              {currentPage === 'settings' && 'Paramètres'}
             </h2>
           </div>
 
@@ -768,88 +708,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
         </header>
 
         <main className="flex-1 overflow-auto p-6">
-          {currentPage === 'dashboard' && (
-            <div className="space-y-6">
-              <div className="bg-gradient-to-r from-emerald-600 to-emerald-800 text-white rounded-2xl p-6">
-                <h1 className="text-2xl mb-2">Vue d'ensemble RH</h1>
-                <p className="opacity-90">
-                  Suivi complet des éléments variables de paie - Toutes divisions
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Card className="border-slate-200">
-                  <CardContent className="p-4">
-                    <p className="text-sm text-slate-600">Total EVP</p>
-                    <p className="text-3xl text-slate-900 mt-1">{totalRecords}</p>
-                    <p className="text-xs text-slate-500 mt-1">Ce mois</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4">
-                    <p className="text-sm text-slate-600">Validés</p>
-                    <p className="text-3xl text-emerald-600 mt-1">{validatedCount}</p>
-                    <p className="text-xs text-emerald-600 mt-1">Taux: {Math.round((validatedCount/totalRecords)*100)}%</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4">
-                    <p className="text-sm text-slate-600">En attente</p>
-                    <p className="text-3xl text-orange-600 mt-1">{pendingCount}</p>
-                    <p className="text-xs text-slate-500 mt-1">À traiter</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4">
-                    <p className="text-sm text-slate-600">Rejetés</p>
-                    <p className="text-3xl text-red-600 mt-1">{rejectedCount}</p>
-                    <p className="text-xs text-red-600 mt-1">Taux: {Math.round((rejectedCount/totalRecords)*100)}%</p>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Synthèse par division</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    {['Production', 'Qualité', 'Logistique'].map(div => {
-                      const divRecords = records.filter(r => r.division === div);
-                      const divValidated = divRecords.filter(r => r.status === 'validated').length;
-                      const divTotal = divRecords.length;
-                      const rate = divTotal > 0 ? Math.round((divValidated/divTotal)*100) : 0;
-                      
-                      return (
-                        <div key={div} className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl">
-                          <div className="flex-1">
-                            <p className="text-sm text-slate-900">{div}</p>
-                            <div className="flex items-center gap-2 mt-2">
-                              <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-emerald-600"
-                                  style={{ width: `${rate}%` }}
-                                ></div>
-                              </div>
-                              <span className="text-sm text-slate-700">{rate}%</span>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-2xl text-slate-900">{divTotal}</p>
-                            <p className="text-xs text-slate-600">EVP</p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-
           {currentPage === 'reporting' && (
             <div className="space-y-6">
               <div>
@@ -964,24 +822,34 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                               const employee = sub.employee;
                               const nomComplet = employee.prenom ? `${employee.prenom} ${employee.nom}` : employee.nom;
                               
-                              // Type EVP - deux lignes empilées
+                              // Type EVP - si un filtre de type est actif, n'afficher que ce type
                               const typeEVPItems = [];
-                              if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
-                              if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+                              if (reportingFilterType === 'prime') {
+                                // Filtre Prime : n'afficher que Prime
+                                if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
+                              } else if (reportingFilterType === 'conge') {
+                                // Filtre Congé : n'afficher que Congé
+                                if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+                              } else {
+                                // Filtre "Tous" : afficher tous les types
+                                if (sub.isPrime && sub.prime) typeEVPItems.push('Prime');
+                                if (sub.isConge && sub.conge) typeEVPItems.push('Congé');
+                              }
 
-                              const montantPrime = sub.prime?.montantCalcule 
+                              // Afficher les montants seulement pour le type sélectionné dans le filtre
+                              const montantPrime = (reportingFilterType === 'prime' || reportingFilterType === 'all') && sub.prime?.montantCalcule 
                                 ? (typeof sub.prime.montantCalcule === 'string' 
                                     ? parseFloat(sub.prime.montantCalcule) 
                                     : sub.prime.montantCalcule).toFixed(2)
                                 : '-';
                               
-                              const montantIndemnite = sub.conge?.indemniteCalculee 
+                              const montantIndemnite = (reportingFilterType === 'conge' || reportingFilterType === 'all') && sub.conge?.indemniteCalculee 
                                 ? (typeof sub.conge.indemniteCalculee === 'string' 
                                     ? parseFloat(sub.conge.indemniteCalculee) 
                                     : sub.conge.indemniteCalculee).toFixed(2)
                                 : '-';
 
-                              const dureeConge = sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
+                              const dureeConge = (reportingFilterType === 'conge' || reportingFilterType === 'all') && sub.conge?.nombreJours ? `${sub.conge.nombreJours} jour(s)` : '-';
 
                               // Dates de soumission - deux lignes empilées
                               const formatDate = (dateStr: string | undefined) => {
@@ -992,8 +860,9 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                   year: 'numeric'
                                 });
                               };
-                              const datePrime = formatDate(sub.prime?.submittedAt);
-                              const dateConge = formatDate(sub.conge?.submittedAt);
+                              // Afficher les dates seulement pour le type sélectionné dans le filtre
+                              const datePrime = (reportingFilterType === 'prime' || reportingFilterType === 'all') ? formatDate(sub.prime?.submittedAt) : null;
+                              const dateConge = (reportingFilterType === 'conge' || reportingFilterType === 'all') ? formatDate(sub.conge?.submittedAt) : null;
 
                               // Déterminer les réponses Service et Division pour Prime
                               const getPrimeServiceResponse = () => {
@@ -1073,7 +942,8 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                   {/* Colonne Soumis */}
                                   <td className="py-3 px-4">
                                     <div className="flex flex-col gap-1">
-                                      {sub.isPrime && sub.prime && (
+                                      {/* Afficher seulement pour le type sélectionné dans le filtre */}
+                                      {(reportingFilterType === 'prime' || reportingFilterType === 'all') && sub.isPrime && sub.prime && (
                                         <div className="mb-1">
                                           {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
                                           {sub.prime.submittedAt && (sub.prime.statut === 'Soumis' || sub.prime.commentaire) && (
@@ -1094,7 +964,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                           )}
                                         </div>
                                       )}
-                                      {sub.isConge && sub.conge && (
+                                      {(reportingFilterType === 'conge' || reportingFilterType === 'all') && sub.isConge && sub.conge && (
                                         <div>
                                           {/* Vérifier si c'est une resoumission : si submittedAt existe ET (statut est "Soumis" OU commentaire existe) */}
                                           {sub.conge.submittedAt && (sub.conge.statut === 'Soumis' || sub.conge.commentaire) && (
@@ -1123,7 +993,8 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                   {/* Colonne Service */}
                                   <td className="py-3 px-4">
                                     <div className="flex flex-col gap-1">
-                                      {sub.isPrime && sub.prime && (
+                                      {/* Afficher seulement pour le type sélectionné dans le filtre */}
+                                      {(reportingFilterType === 'prime' || reportingFilterType === 'all') && sub.isPrime && sub.prime && (
                                         <div className="mb-1">
                                           {getPrimeServiceResponse() === 'Validée' && (
                                             <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1136,7 +1007,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                           )}
                                         </div>
                                       )}
-                                      {sub.isConge && sub.conge && (
+                                      {(reportingFilterType === 'conge' || reportingFilterType === 'all') && sub.isConge && sub.conge && (
                                         <div>
                                           {getCongeServiceResponse() === 'Validée' && (
                                             <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1157,7 +1028,8 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                   {/* Colonne Division */}
                                   <td className="py-3 px-4">
                                     <div className="flex flex-col gap-1">
-                                      {sub.isPrime && sub.prime && (
+                                      {/* Afficher seulement pour le type sélectionné dans le filtre */}
+                                      {(reportingFilterType === 'prime' || reportingFilterType === 'all') && sub.isPrime && sub.prime && (
                                         <div className="mb-1">
                                           {getPrimeDivisionResponse() === 'Validée' && (
                                             <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1170,7 +1042,7 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
                                           )}
                                         </div>
                                       )}
-                                      {sub.isConge && sub.conge && (
+                                      {(reportingFilterType === 'conge' || reportingFilterType === 'all') && sub.isConge && sub.conge && (
                                         <div>
                                         {getCongeDivisionResponse() === 'Validée' && (
                                           <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">Validée</Badge>
@@ -1602,81 +1474,6 @@ export default function RHPage({ user, onLogout }: RHPageProps) {
             </div>
           )}
 
-          {currentPage === 'settings' && (
-            <div className="space-y-6">
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Configuration Oracle ERP</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-slate-900">Intégration Oracle ERP</p>
-                      <p className="text-xs text-slate-600 mt-1">
-                        Synchronisation automatique des données validées
-                      </p>
-                    </div>
-                    <Switch
-                      checked={erpIntegration}
-                      onCheckedChange={setErpIntegration}
-                    />
-                  </div>
-
-                  {erpIntegration && (
-                    <>
-                      <div className="space-y-4 p-4 bg-slate-50 rounded-xl">
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">URL du serveur Oracle</label>
-                          <Input
-                            placeholder="https://erp.ocp.ma/api"
-                            defaultValue="https://erp.ocp.ma/api/v1"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">Clé API</label>
-                          <Input
-                            type="password"
-                            placeholder="••••••••••••••••"
-                            defaultValue="sk_live_xxxxxxxxxxxxx"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">Fréquence de synchronisation</label>
-                          <Select defaultValue="daily">
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="realtime">Temps réel</SelectItem>
-                              <SelectItem value="hourly">Toutes les heures</SelectItem>
-                              <SelectItem value="daily">Quotidienne</SelectItem>
-                              <SelectItem value="weekly">Hebdomadaire</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <Button
-                          onClick={handleTestConnection}
-                          disabled={connectionStatus === 'testing'}
-                          className="bg-emerald-600 hover:bg-emerald-700"
-                        >
-                          {connectionStatus === 'testing' ? 'Test en cours...' : 'Tester la connexion'}
-                        </Button>
-                        {connectionStatus === 'success' && (
-                          <div className="flex items-center gap-2 text-emerald-600">
-                            <CheckCircle2 className="w-5 h-5" />
-                            <span className="text-sm">Connexion réussie</span>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
         </main>
       </div>
 

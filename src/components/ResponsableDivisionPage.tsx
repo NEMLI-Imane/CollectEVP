@@ -52,7 +52,7 @@ interface MonthlyBudget {
 }
 
 export default function ResponsableDivisionPage({ user, onLogout }: ResponsableDivisionPageProps) {
-  const [currentPage, setCurrentPage] = useState<'validation' | 'reporting' | 'historique'>('validation');
+  const [currentPage, setCurrentPage] = useState<'validation' | 'historique'>('validation');
   const [submissions, setSubmissions] = useState<EVPSubmission[]>([]);
   const [historicalSubmissions, setHistoricalSubmissions] = useState<EVPSubmission[]>([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
@@ -74,6 +74,13 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
       loadHistory();
     }
   }, [currentPage]);
+
+  // Recharger l'historique quand on revient sur la page validation pour mettre à jour les stats
+  useEffect(() => {
+    if (currentPage === 'validation') {
+      loadHistory();
+    }
+  }, [submissions.length]);
 
   const loadSubmissions = async () => {
     try {
@@ -348,8 +355,8 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
 
     // Filtre par type (Prime/Congé)
     if (historyTypeFilter === 'prime') {
-      // Ne garder QUE les soumissions qui ont Prime ET PAS Congé (et qui sont traitées par la division)
-      if (!sub.isPrime || !sub.prime || (sub.isConge && sub.conge)) return false;
+      // Garder les soumissions qui ont Prime (même si elles ont aussi Congé)
+      if (!sub.isPrime || !sub.prime) return false;
       
       const primeStatus = sub.prime.statut;
       const isPrimeProcessed = primeStatus === 'Validé Division' || 
@@ -371,8 +378,8 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
       }
       return true;
     } else if (historyTypeFilter === 'conge') {
-      // Ne garder QUE les soumissions qui ont Congé ET PAS Prime (et qui sont traitées par la division)
-      if (!sub.isConge || !sub.conge || (sub.isPrime && sub.prime)) return false;
+      // Garder les soumissions qui ont Congé (même si elles ont aussi Prime)
+      if (!sub.isConge || !sub.conge) return false;
       
       const congeStatus = sub.conge.statut;
       const isCongeProcessed = congeStatus === 'Validé Division' || 
@@ -438,10 +445,56 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
     }
   });
 
-  const totalPending = serviceData.reduce((sum, s) => sum + s.pending, 0);
-  const totalValidated = serviceData.reduce((sum, s) => sum + s.validated, 0);
-  const totalRejected = serviceData.reduce((sum, s) => sum + s.rejected, 0);
-  const avgTime = '1.2j';
+  // Calculer les vraies statistiques depuis les soumissions
+  const calculateStats = () => {
+    // En attente : soumissions avec statut "Validé Service" (en attente de validation division)
+    const pending = submissions.length;
+    
+    // Validés ce mois : soumissions approuvées par la division ce mois
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    const validatedThisMonth = historicalSubmissions.filter(sub => {
+      const primeStatus = sub.prime?.statut;
+      const congeStatus = sub.conge?.statut;
+      
+      const isPrimeApproved = sub.isPrime && sub.prime && 
+        (primeStatus === 'Validé Division' || primeStatus === 'Validé');
+      const isCongeApproved = sub.isConge && sub.conge && 
+        (congeStatus === 'Validé Division' || congeStatus === 'Validé');
+      
+      if (!isPrimeApproved && !isCongeApproved) return false;
+      
+      // Vérifier la date de soumission pour ce mois
+      const submittedAt = sub.prime?.submittedAt || sub.conge?.submittedAt;
+      if (!submittedAt) return false;
+      
+      const submittedDate = new Date(submittedAt);
+      return submittedDate.getMonth() === currentMonth && 
+             submittedDate.getFullYear() === currentYear;
+    }).length;
+    
+    // Rejetés : soumissions rejetées par la division
+    const rejected = historicalSubmissions.filter(sub => {
+      const primeStatus = sub.prime?.statut;
+      const congeStatus = sub.conge?.statut;
+      
+      const isPrimeRejected = sub.isPrime && sub.prime && 
+        primeStatus === 'Rejeté' && sub.valideService;
+      const isCongeRejected = sub.isConge && sub.conge && 
+        congeStatus === 'Rejeté' && sub.valideService;
+      
+      return isPrimeRejected || isCongeRejected;
+    }).length;
+    
+    return { pending, validatedThisMonth, rejected };
+  };
+  
+  const stats = calculateStats();
+  const totalPending = stats.pending;
+  const totalValidated = stats.validatedThisMonth;
+  const totalRejected = stats.rejected;
 
   return (
     <div className="flex h-screen bg-slate-50">
@@ -487,17 +540,6 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
             <span className="flex-1 text-left">Historique</span>
           </button>
 
-          <button
-            onClick={() => setCurrentPage('reporting')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentPage === 'reporting'
-                ? 'bg-gradient-to-r from-emerald-700 to-emerald-900 text-white shadow-lg shadow-emerald-200'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <BarChart3 className="w-5 h-5" />
-            <span className="flex-1 text-left">Reporting Avancé</span>
-          </button>
         </nav>
 
         <div className="p-4 border-t border-slate-200">
@@ -531,8 +573,7 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
               <Menu className="w-5 h-5" />
             </Button>
             <h2 className="text-xl text-slate-900">
-              {currentPage === 'validation' ? 'Validation Division' : 
-               currentPage === 'historique' ? 'Historique' : 'Reporting Avancé'}
+              {currentPage === 'validation' ? 'Validation Division' : 'Historique'}
             </h2>
           </div>
 
@@ -576,6 +617,45 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
                   </div>
                 </div>
               )}
+
+              {/* Key stats */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card className="border-slate-200">
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center">
+                      <Clock className="w-6 h-6 text-orange-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-600">En attente</p>
+                      <p className="text-2xl text-slate-900">{totalPending}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200">
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center">
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-600">Validés ce mois</p>
+                      <p className="text-2xl text-emerald-600">{totalValidated}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200">
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center">
+                      <CheckCircle2 className="w-6 h-6 text-red-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-600">Rejetés</p>
+                      <p className="text-2xl text-red-600">{totalRejected}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
 
               {/* Filters */}
               <Card className="border-slate-200">
@@ -766,121 +846,6 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
                   )}
                 </CardContent>
               </Card>
-
-              {/* Key stats */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Card className="border-slate-200">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="w-12 h-12 bg-orange-50 rounded-xl flex items-center justify-center">
-                      <Clock className="w-6 h-6 text-orange-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-600">En attente</p>
-                      <p className="text-2xl text-slate-900">{totalPending}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center">
-                      <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-600">Validés ce mois</p>
-                      <p className="text-2xl text-emerald-600">{totalValidated}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center">
-                      <CheckCircle2 className="w-6 h-6 text-red-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-600">Rejetés</p>
-                      <p className="text-2xl text-red-600">{totalRejected}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center">
-                      <TrendingUp className="w-6 h-6 text-blue-600" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-slate-600">Temps moyen</p>
-                      <p className="text-2xl text-blue-600">{avgTime}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Table by service */}
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Indicateurs agrégés par service</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Service</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">En attente</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Validés</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Rejetés</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Temps moyen</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Taux validation</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {serviceData.map((service, idx) => {
-                          const total = service.validated + service.rejected;
-                          const rate = total > 0 ? Math.round((service.validated / total) * 100) : 0;
-                          
-                          return (
-                            <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
-                              <td className="py-3 px-4">
-                                <span className="text-sm text-slate-900">{service.service}</span>
-                              </td>
-                              <td className="py-3 px-4">
-                                <Badge className="bg-orange-100 text-orange-700">
-                                  {service.pending}
-                                </Badge>
-                              </td>
-                              <td className="py-3 px-4">
-                                <Badge className="bg-emerald-100 text-emerald-700">
-                                  {service.validated}
-                                </Badge>
-                              </td>
-                              <td className="py-3 px-4">
-                                <Badge className="bg-red-100 text-red-700">
-                                  {service.rejected}
-                                </Badge>
-                              </td>
-                              <td className="py-3 px-4 text-sm text-slate-700">{service.avgTime}</td>
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full bg-emerald-600"
-                                      style={{ width: `${rate}%` }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-sm text-slate-700">{rate}%</span>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           ) : currentPage === 'historique' ? (
             <div className="space-y-6">
@@ -972,23 +937,49 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
                               const nomComplet = employee?.prenom ? `${employee.prenom} ${employee.nom}` : employee?.nom || '-';
                               
                               // Type EVP - ne garder que les types traités par la division (approuvés ou rejetés)
+                              // Si un filtre de type est actif, n'afficher que ce type
                               const typeEVPItems = [];
-                              if (sub.isPrime && sub.prime) {
-                                const primeStatus = sub.prime.statut;
-                                const isPrimeProcessed = primeStatus === 'Validé Division' || 
-                                                         primeStatus === 'Validé' || 
-                                                         (primeStatus === 'Rejeté' && sub.valideService);
-                                if (isPrimeProcessed) {
-                                  typeEVPItems.push('Prime');
+                              if (historyTypeFilter === 'prime') {
+                                // Filtre Prime : n'afficher que Prime
+                                if (sub.isPrime && sub.prime) {
+                                  const primeStatus = sub.prime.statut;
+                                  const isPrimeProcessed = primeStatus === 'Validé Division' || 
+                                                           primeStatus === 'Validé' || 
+                                                           (primeStatus === 'Rejeté' && sub.valideService);
+                                  if (isPrimeProcessed) {
+                                    typeEVPItems.push('Prime');
+                                  }
                                 }
-                              }
-                              if (sub.isConge && sub.conge) {
-                                const congeStatus = sub.conge.statut;
-                                const isCongeProcessed = congeStatus === 'Validé Division' || 
-                                                         congeStatus === 'Validé' || 
-                                                         (congeStatus === 'Rejeté' && sub.valideService);
-                                if (isCongeProcessed) {
-                                  typeEVPItems.push('Congé');
+                              } else if (historyTypeFilter === 'conge') {
+                                // Filtre Congé : n'afficher que Congé
+                                if (sub.isConge && sub.conge) {
+                                  const congeStatus = sub.conge.statut;
+                                  const isCongeProcessed = congeStatus === 'Validé Division' || 
+                                                           congeStatus === 'Validé' || 
+                                                           (congeStatus === 'Rejeté' && sub.valideService);
+                                  if (isCongeProcessed) {
+                                    typeEVPItems.push('Congé');
+                                  }
+                                }
+                              } else {
+                                // Filtre "Tous" : afficher tous les types traités
+                                if (sub.isPrime && sub.prime) {
+                                  const primeStatus = sub.prime.statut;
+                                  const isPrimeProcessed = primeStatus === 'Validé Division' || 
+                                                           primeStatus === 'Validé' || 
+                                                           (primeStatus === 'Rejeté' && sub.valideService);
+                                  if (isPrimeProcessed) {
+                                    typeEVPItems.push('Prime');
+                                  }
+                                }
+                                if (sub.isConge && sub.conge) {
+                                  const congeStatus = sub.conge.statut;
+                                  const isCongeProcessed = congeStatus === 'Validé Division' || 
+                                                           congeStatus === 'Validé' || 
+                                                           (congeStatus === 'Rejeté' && sub.valideService);
+                                  if (isCongeProcessed) {
+                                    typeEVPItems.push('Congé');
+                                  }
                                 }
                               }
 
@@ -1015,8 +1006,9 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
                                   year: 'numeric'
                                 });
                               };
-                              const datePrime = formatDate(sub.prime?.submittedAt);
-                              const dateConge = formatDate(sub.conge?.submittedAt);
+                              // Afficher les dates seulement pour le type sélectionné dans le filtre
+                              const datePrime = (historyTypeFilter === 'prime' || historyTypeFilter === 'all') ? formatDate(sub.prime?.submittedAt) : null;
+                              const dateConge = (historyTypeFilter === 'conge' || historyTypeFilter === 'all') ? formatDate(sub.conge?.submittedAt) : null;
 
                               return (
                                 <tr key={sub.id} className="border-b border-slate-100 hover:bg-slate-50">
@@ -1116,212 +1108,7 @@ export default function ResponsableDivisionPage({ user, onLogout }: ResponsableD
                 </CardContent>
               </Card>
             </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h1 className="text-2xl text-slate-900">Reporting Avancé - {user.division}</h1>
-                <Button onClick={openBudgetDialog} className="bg-emerald-600 hover:bg-emerald-700">
-                  <DollarSign className="w-4 h-4 mr-2" />
-                  Saisir le montant prévu
-                </Button>
-              </div>
-
-              {/* Monthly Budget Table */}
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Gestion budgétaire mensuelle</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Mois</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Prévu (DH)</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Montant Réalisé (DH)</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Écart (Réalisé - Prévu)</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {monthlyBudgets.map((budget, idx) => {
-                          const ecart = budget.montantPrevu 
-                            ? budget.montantRealise - budget.montantPrevu 
-                            : null;
-                          const ecartPercent = budget.montantPrevu 
-                            ? Math.round((ecart! / budget.montantPrevu) * 100) 
-                            : null;
-                          
-                          return (
-                            <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
-                              <td className="py-3 px-4">
-                                <span className="text-sm text-slate-900">{budget.mois}</span>
-                              </td>
-                              <td className="py-3 px-4">
-                                {budget.montantPrevu ? (
-                                  <span className="text-sm text-slate-900">{budget.montantPrevu.toLocaleString()} DH</span>
-                                ) : (
-                                  <span className="text-sm text-slate-400 italic">Non défini</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-4">
-                                <span className="text-sm text-slate-900">{budget.montantRealise.toLocaleString()} DH</span>
-                              </td>
-                              <td className="py-3 px-4">
-                                {ecart !== null ? (
-                                  <div className="flex items-center gap-2">
-                                    <span className={`text-sm ${
-                                      ecart > 0 ? 'text-red-600' : ecart < 0 ? 'text-emerald-600' : 'text-slate-600'
-                                    }`}>
-                                      {ecart > 0 ? '+' : ''}{ecart.toLocaleString()} DH
-                                    </span>
-                                    <Badge className={
-                                      ecart > 0 
-                                        ? 'bg-red-100 text-red-700 border-red-200' 
-                                        : ecart < 0 
-                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-                                        : 'bg-slate-100 text-slate-700 border-slate-200'
-                                    }>
-                                      {ecartPercent !== null && `${ecartPercent > 0 ? '+' : ''}${ecartPercent}%`}
-                                    </Badge>
-                                  </div>
-                                ) : (
-                                  <span className="text-sm text-slate-400 italic">-</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-4">
-                                {getReportStatusBadge(budget.statut)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Charts */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Évolution budgétaire</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={monthlyTrendData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="mois" stroke="#64748b" />
-                        <YAxis stroke="#64748b" />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: 'white',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: '8px',
-                          }}
-                        />
-                        <Legend />
-                        <Line 
-                          type="monotone" 
-                          dataKey="prevu" 
-                          stroke="#3b82f6" 
-                          strokeWidth={2}
-                          name="Prévu (K DH)" 
-                          dot={{ fill: '#3b82f6', r: 4 }}
-                        />
-                        <Line 
-                          type="monotone" 
-                          dataKey="realise" 
-                          stroke="#059669" 
-                          strokeWidth={2}
-                          name="Réalisé (K DH)" 
-                          dot={{ fill: '#059669', r: 4 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Validations par service</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="service" stroke="#64748b" />
-                        <YAxis stroke="#64748b" />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: 'white',
-                            border: '1px solid #e2e8f0',
-                            borderRadius: '8px',
-                          }}
-                        />
-                        <Bar dataKey="validated" fill="#059669" name="Validés" radius={[8, 8, 0, 0]} />
-                        <Bar dataKey="rejected" fill="#ef4444" name="Rejetés" radius={[8, 8, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200">
-                  <CardHeader>
-                    <CardTitle>Répartition par type d'EVP</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <PieChart>
-                        <Pie
-                          data={typeDistribution}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, value }) => `${name}: ${value}%`}
-                          outerRadius={100}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          {typeDistribution.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Summary cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <Card className="border-slate-200 bg-gradient-to-br from-emerald-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Performance globale</p>
-                    <p className="text-3xl text-emerald-700 mb-1">Excellent</p>
-                    <p className="text-xs text-slate-600">Taux de validation: 95%</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-gradient-to-br from-blue-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Délai moyen traitement</p>
-                    <p className="text-3xl text-blue-700 mb-1">1.2 jours</p>
-                    <p className="text-xs text-slate-600">-15% vs mois dernier</p>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-gradient-to-br from-orange-50 to-white">
-                  <CardContent className="p-6">
-                    <p className="text-sm text-slate-600 mb-2">Services actifs</p>
-                    <p className="text-3xl text-orange-700 mb-1">{serviceData.length}</p>
-                    <p className="text-xs text-slate-600">Total: {totalPending + totalValidated + totalRejected} EVP</p>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          )}
+          ) : null}
         </main>
       </div>
 

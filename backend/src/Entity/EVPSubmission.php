@@ -63,12 +63,8 @@ class EVPSubmission
     #[Groups(['evp:read'])]
     private bool $valideDivision = false;
 
-    #[ORM\OneToMany(mappedBy: 'evpSubmission', targetEntity: ValidationHistory::class, cascade: ['persist', 'remove'])]
-    private Collection $validationHistories;
-
     public function __construct()
     {
-        $this->validationHistories = new ArrayCollection();
         $this->montantCalcule = '0.00';
         $this->isPrime = false;
         $this->isConge = false;
@@ -167,35 +163,6 @@ class EVPSubmission
     public function setValideDivision(bool $valideDivision): self
     {
         $this->valideDivision = $valideDivision;
-        return $this;
-    }
-
-    /**
-     * @return Collection<int, ValidationHistory>
-     */
-    public function getValidationHistories(): Collection
-    {
-        return $this->validationHistories;
-    }
-
-    public function addValidationHistory(ValidationHistory $validationHistory): self
-    {
-        if (!$this->validationHistories->contains($validationHistory)) {
-            $this->validationHistories->add($validationHistory);
-            $validationHistory->setEvpSubmission($this);
-        }
-
-        return $this;
-    }
-
-    public function removeValidationHistory(ValidationHistory $validationHistory): self
-    {
-        if ($this->validationHistories->removeElement($validationHistory)) {
-            if ($validationHistory->getEvpSubmission() === $this) {
-                $validationHistory->setEvpSubmission(null);
-            }
-        }
-
         return $this;
     }
 

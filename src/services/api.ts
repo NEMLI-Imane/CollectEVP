@@ -620,3 +620,111 @@ export const validateEVPSubmission = async (
   }
 };
 
+// User management interfaces
+export interface SystemUser {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  division?: string;
+  status: 'active' | 'inactive';
+}
+
+// Get all users
+export const getUsers = async (): Promise<SystemUser[]> => {
+  console.log('📤 Récupération des utilisateurs...');
+
+  try {
+    const response = await apiRequest('/users', {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la récupération des utilisateurs');
+    }
+
+    const result = await response.json();
+    console.log('✅ Utilisateurs récupérés avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la récupération des utilisateurs:', error);
+    throw error;
+  }
+};
+
+// Create user
+export const createUser = async (data: {
+  name: string;
+  email: string;
+  role: string;
+  division?: string;
+  password?: string;
+}): Promise<SystemUser> => {
+  console.log('📤 Création d\'un utilisateur:', data);
+
+  try {
+    const response = await apiRequest('/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la création de l\'utilisateur');
+    }
+
+    const result = await response.json();
+    console.log('✅ Utilisateur créé avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la création de l\'utilisateur:', error);
+    throw error;
+  }
+};
+
+// Update user
+export const updateUser = async (id: number, data: Partial<SystemUser & { password?: string }>): Promise<SystemUser> => {
+  console.log('📤 Mise à jour d\'un utilisateur:', { id, data });
+
+  try {
+    const response = await apiRequest(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la mise à jour de l\'utilisateur');
+    }
+
+    const result = await response.json();
+    console.log('✅ Utilisateur mis à jour avec succès');
+    return result;
+  } catch (error) {
+    console.error('❌ Erreur lors de la mise à jour de l\'utilisateur:', error);
+    throw error;
+  }
+};
+
+// Delete user
+export const deleteUser = async (id: number): Promise<void> => {
+  console.log('📤 Suppression d\'un utilisateur:', id);
+
+  try {
+    const response = await apiRequest(`/users/${id}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Erreur inconnue' }));
+      throw new Error(errorData.error || errorData.message || 'Erreur lors de la suppression de l\'utilisateur');
+    }
+
+    console.log('✅ Utilisateur supprimé avec succès');
+  } catch (error) {
+    console.error('❌ Erreur lors de la suppression de l\'utilisateur:', error);
+    throw error;
+  }
+};
+

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { User } from '../App';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -7,7 +7,8 @@ import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Switch } from './ui/switch';
 import { Users, Database, Settings, LogOut, Plus, Trash2, Edit, CheckCircle2, Shield, Menu } from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
+import { getUsers, createUser, updateUser, deleteUser, SystemUser } from '../services/api';
 import {
   Dialog,
   DialogContent,
@@ -30,35 +31,42 @@ interface AdminPageProps {
   onLogout: () => void;
 }
 
-interface SystemUser {
-  id: number;
-  name: string;
-  email: string;
-  role: string;
-  division: string;
-  status: 'active' | 'inactive';
-}
 
 export default function AdminPage({ user, onLogout }: AdminPageProps) {
-  const [currentPage, setCurrentPage] = useState<'users' | 'integration' | 'settings'>('users');
+  const [currentPage, setCurrentPage] = useState<'users' | 'settings'>('users');
   const [showAddUserDialog, setShowAddUserDialog] = useState(false);
-  const [erpIntegration, setErpIntegration] = useState(true);
-  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'testing' | 'success'>('idle');
-
-  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([
-    { id: 1, name: 'Ahmed Bennani', email: 'gestionnaire@ocp.ma', role: 'Gestionnaire', division: 'Production', status: 'active' },
-    { id: 2, name: 'Fatima Zahra Alami', email: 'responsable.service@ocp.ma', role: 'Responsable Service', division: 'Service Maintenance', status: 'active' },
-    { id: 3, name: 'Hassan Mouhib', email: 'responsable.division@ocp.ma', role: 'Responsable Division', division: 'Division Production', status: 'active' },
-    { id: 4, name: 'Mohammed Tazi', email: 'rh@ocp.ma', role: 'RH', division: 'Ressources Humaines', status: 'active' },
-    { id: 5, name: 'Salma Benjelloun', email: 's.benjelloun@ocp.ma', role: 'Gestionnaire', division: 'Qualité', status: 'active' },
-  ]);
+  const [showEditUserDialog, setShowEditUserDialog] = useState(false);
+  const [editingUser, setEditingUser] = useState<SystemUser | null>(null);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [systemUsers, setSystemUsers] = useState<SystemUser[]>([]);
 
   const [newUser, setNewUser] = useState({
     name: '',
     email: '',
     role: 'Gestionnaire',
     division: 'Production',
+    password: 'password123',
   });
+
+  // Charger les utilisateurs depuis l'API
+  useEffect(() => {
+    if (currentPage === 'users') {
+      loadUsers();
+    }
+  }, [currentPage]);
+
+  const loadUsers = async () => {
+    try {
+      setLoadingUsers(true);
+      const users = await getUsers();
+      setSystemUsers(users);
+    } catch (error) {
+      console.error('Erreur lors du chargement des utilisateurs:', error);
+      toast.error('Erreur lors du chargement des utilisateurs: ' + (error instanceof Error ? error.message : 'Erreur inconnue'));
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
 
   const getInitials = (name: string) => {
     return name
@@ -69,44 +77,116 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
       .slice(0, 2);
   };
 
-  const handleAddUser = () => {
+  const handleAddUser = async () => {
     if (!newUser.name || !newUser.email) {
       toast.error('Veuillez remplir tous les champs obligatoires');
       return;
     }
 
-    setSystemUsers([
-      ...systemUsers,
-      {
-        id: Date.now(),
+    try {
+      await createUser({
         name: newUser.name,
         email: newUser.email,
         role: newUser.role,
         division: newUser.division,
-        status: 'active',
-      },
-    ]);
+        password: newUser.password,
+      });
 
+      setNewUser({
+        name: '',
+        email: '',
+        role: 'Gestionnaire',
+        division: 'Production',
+        password: 'password123',
+      });
+      setShowAddUserDialog(false);
+      toast.success('Utilisateur ajouté avec succès');
+      await loadUsers();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de l'ajout: ${errorMessage}`);
+    }
+  };
+
+  const handleEditUser = (usr: SystemUser) => {
+    setEditingUser(usr);
     setNewUser({
-      name: '',
-      email: '',
-      role: 'Gestionnaire',
-      division: 'Production',
+      name: usr.name,
+      email: usr.email,
+      role: usr.role,
+      division: usr.division || 'Production',
+      password: '',
     });
-    setShowAddUserDialog(false);
-    toast.success('Utilisateur ajouté avec succès');
+    setShowEditUserDialog(true);
   };
 
-  const handleDeleteUser = (id: number) => {
-    setSystemUsers(systemUsers.filter(u => u.id !== id));
-    toast.success('Utilisateur supprimé');
+  const handleUpdateUser = async () => {
+    if (!editingUser || !newUser.name || !newUser.email) {
+      toast.error('Veuillez remplir tous les champs obligatoires');
+      return;
+    }
+
+    try {
+      const updateData: any = {
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+        division: newUser.division,
+        status: editingUser.status,
+      };
+      
+      if (newUser.password && newUser.password.trim() !== '') {
+        updateData.password = newUser.password;
+      }
+
+      await updateUser(editingUser.id, updateData);
+      
+      setShowEditUserDialog(false);
+      setEditingUser(null);
+      setNewUser({
+        name: '',
+        email: '',
+        role: 'Gestionnaire',
+        division: 'Production',
+        password: 'password123',
+      });
+      toast.success('Utilisateur modifié avec succès');
+      await loadUsers();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la modification: ${errorMessage}`);
+    }
   };
 
-  const handleToggleUserStatus = (id: number) => {
-    setSystemUsers(systemUsers.map(u => 
-      u.id === id ? { ...u, status: u.status === 'active' ? 'inactive' as const : 'active' as const } : u
-    ));
-    toast.success('Statut utilisateur mis à jour');
+  const handleDeleteUser = async (id: number) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) {
+      return;
+    }
+
+    try {
+      await deleteUser(id);
+      toast.success('Utilisateur supprimé');
+      await loadUsers();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la suppression: ${errorMessage}`);
+    }
+  };
+
+  const handleToggleUserStatus = async (id: number) => {
+    const usr = systemUsers.find(u => u.id === id);
+    if (!usr) return;
+
+    try {
+      await updateUser(id, {
+        status: usr.status === 'active' ? 'inactive' : 'active',
+      });
+      toast.success('Statut utilisateur mis à jour');
+      await loadUsers();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Une erreur est survenue';
+      toast.error(`Erreur lors de la mise à jour: ${errorMessage}`);
+    }
   };
 
   const handleTestConnection = () => {
@@ -119,11 +199,33 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
   };
 
   const rolePermissions = {
-    'Gestionnaire': ['Saisir EVP', 'Consulter historique'],
-    'Responsable Service': ['Valider EVP service', 'Rejeter EVP', 'Consulter reporting'],
-    'Responsable Division': ['Valider EVP division', 'Rejeter EVP', 'Reporting avancé'],
-    'RH': ['Vue globale', 'Export Oracle', 'Reporting complet'],
-    'Administrateur': ['Accès total', 'Gestion utilisateurs', 'Configuration système'],
+    'Gestionnaire': [
+      'Saisie EVP (Prime et Congé)',
+      'Soumission',
+      'Historique',
+      'Demande ajout employés'
+    ],
+    'Responsable Service': [
+      'Validation/rejet niveau service',
+      'Historique',
+      'Commentaires de rejet'
+    ],
+    'Responsable Division': [
+      'Validation/rejet niveau division',
+      'Historique'
+    ],
+    'RH': [
+      'Reporting global',
+      'Gestion employés',
+      'Traitement demandes',
+      'Historique consolidé'
+    ],
+    'Administrateur': [
+      'Gestion utilisateurs',
+      'Activation/désactivation',
+      'Configuration système',
+      'Gestion rôles'
+    ],
   };
 
   return (
@@ -155,17 +257,6 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
             <span className="flex-1 text-left">Gestion utilisateurs</span>
           </button>
 
-          <button
-            onClick={() => setCurrentPage('integration')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-              currentPage === 'integration'
-                ? 'bg-gradient-to-r from-slate-700 to-slate-900 text-white shadow-lg shadow-slate-200'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <Database className="w-5 h-5" />
-            <span className="flex-1 text-left">Intégration Oracle</span>
-          </button>
 
           <button
             onClick={() => setCurrentPage('settings')}
@@ -212,7 +303,6 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
             </Button>
             <h2 className="text-xl text-slate-900">
               {currentPage === 'users' && 'Gestion des utilisateurs'}
-              {currentPage === 'integration' && 'Intégration Oracle'}
               {currentPage === 'settings' && 'Paramètres système'}
             </h2>
           </div>
@@ -303,13 +393,113 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                           </SelectContent>
                         </Select>
                       </div>
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Mot de passe</label>
+                        <Input
+                          type="password"
+                          placeholder="password123 (par défaut)"
+                          value={newUser.password}
+                          onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                        />
+                      </div>
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setShowAddUserDialog(false)}>
+                      <Button variant="outline" onClick={() => {
+                        setShowAddUserDialog(false);
+                        setNewUser({ name: '', email: '', role: 'Gestionnaire', division: 'Production', password: 'password123' });
+                      }}>
                         Annuler
                       </Button>
                       <Button onClick={handleAddUser} className="bg-emerald-600 hover:bg-emerald-700">
                         Ajouter
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
+                {/* Edit User Dialog */}
+                <Dialog open={showEditUserDialog} onOpenChange={(open) => {
+                  setShowEditUserDialog(open);
+                  if (!open) {
+                    setEditingUser(null);
+                    setNewUser({ name: '', email: '', role: 'Gestionnaire', division: 'Production', password: 'password123' });
+                  }
+                }}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Modifier un utilisateur</DialogTitle>
+                      <DialogDescription>
+                        Modifiez les informations de l'utilisateur
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Nom complet</label>
+                        <Input
+                          placeholder="Nom de l'utilisateur"
+                          value={newUser.name}
+                          onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Email</label>
+                        <Input
+                          type="email"
+                          placeholder="email@ocp.ma"
+                          value={newUser.email}
+                          onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Rôle</label>
+                        <Select value={newUser.role} onValueChange={(value) => setNewUser({ ...newUser, role: value })}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Gestionnaire">Gestionnaire</SelectItem>
+                            <SelectItem value="Responsable Service">Responsable Service</SelectItem>
+                            <SelectItem value="Responsable Division">Responsable Division</SelectItem>
+                            <SelectItem value="RH">RH</SelectItem>
+                            <SelectItem value="Administrateur">Administrateur</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Division</label>
+                        <Select value={newUser.division} onValueChange={(value) => setNewUser({ ...newUser, division: value })}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Production">Production</SelectItem>
+                            <SelectItem value="Qualité">Qualité</SelectItem>
+                            <SelectItem value="Logistique">Logistique</SelectItem>
+                            <SelectItem value="Maintenance">Maintenance</SelectItem>
+                            <SelectItem value="Ressources Humaines">Ressources Humaines</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-700 mb-1 block">Nouveau mot de passe (laisser vide pour ne pas changer)</label>
+                        <Input
+                          type="password"
+                          placeholder="Laisser vide pour ne pas changer"
+                          value={newUser.password}
+                          onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => {
+                        setShowEditUserDialog(false);
+                        setEditingUser(null);
+                        setNewUser({ name: '', email: '', role: 'Gestionnaire', division: 'Production', password: 'password123' });
+                      }}>
+                        Annuler
+                      </Button>
+                      <Button onClick={handleUpdateUser} className="bg-emerald-600 hover:bg-emerald-700">
+                        Modifier
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -321,20 +511,30 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                   <CardTitle>Liste des utilisateurs ({systemUsers.length})</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b-2 border-slate-200">
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Email</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Rôle</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
-                          <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {systemUsers.map((usr) => (
+                  {loadingUsers ? (
+                    <div className="text-center py-8 text-slate-500">Chargement des utilisateurs...</div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b-2 border-slate-200">
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Nom</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Email</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Rôle</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Division</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Statut</th>
+                            <th className="text-left py-3 px-4 text-sm text-slate-600">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {systemUsers.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="text-center py-8 text-slate-500">
+                                Aucun utilisateur trouvé
+                              </td>
+                            </tr>
+                          ) : (
+                            systemUsers.map((usr) => (
                           <tr key={usr.id} className="border-b border-slate-100 hover:bg-slate-50">
                             <td className="py-3 px-4 text-sm text-slate-900">{usr.name}</td>
                             <td className="py-3 px-4 text-sm text-slate-600">{usr.email}</td>
@@ -359,10 +559,19 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                                 <Button
                                   size="sm"
                                   variant="ghost"
-                                  onClick={() => handleToggleUserStatus(usr.id)}
+                                  onClick={() => handleEditUser(usr)}
                                   className="h-8"
                                 >
                                   <Edit className="w-3 h-3" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleToggleUserStatus(usr.id)}
+                                  className="h-8"
+                                  title={usr.status === 'active' ? 'Désactiver' : 'Activer'}
+                                >
+                                  <Shield className={`w-3 h-3 ${usr.status === 'active' ? 'text-emerald-600' : 'text-slate-400'}`} />
                                 </Button>
                                 <Button
                                   size="sm"
@@ -374,11 +583,13 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                                 </Button>
                               </div>
                             </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                            </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -410,88 +621,6 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
             </div>
           )}
 
-          {currentPage === 'integration' && (
-            <div className="space-y-6">
-              <div>
-                <h1 className="text-2xl text-slate-900 mb-2">Intégration Oracle ERP</h1>
-                <p className="text-slate-600">
-                  Configuration de la connexion au système de paie Oracle
-                </p>
-              </div>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Configuration Oracle</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-slate-900">Activer l'intégration Oracle ERP</p>
-                      <p className="text-xs text-slate-600 mt-1">
-                        Synchronisation automatique des données validées
-                      </p>
-                    </div>
-                    <Switch
-                      checked={erpIntegration}
-                      onCheckedChange={setErpIntegration}
-                    />
-                  </div>
-
-                  {erpIntegration && (
-                    <>
-                      <div className="space-y-4 p-4 bg-slate-50 rounded-xl">
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">URL du serveur Oracle</label>
-                          <Input
-                            placeholder="https://erp.ocp.ma/api"
-                            defaultValue="https://erp.ocp.ma/api/v1/payroll"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">Clé API</label>
-                          <Input
-                            type="password"
-                            placeholder="••••••••••••••••"
-                            defaultValue="sk_live_ocp_xxxxxxxxxxxxx"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm text-slate-700 mb-2 block">Fréquence de synchronisation</label>
-                          <Select defaultValue="daily">
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="realtime">Temps réel</SelectItem>
-                              <SelectItem value="hourly">Toutes les heures</SelectItem>
-                              <SelectItem value="daily">Quotidienne (recommandé)</SelectItem>
-                              <SelectItem value="weekly">Hebdomadaire</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <Button
-                          onClick={handleTestConnection}
-                          disabled={connectionStatus === 'testing'}
-                          className="bg-emerald-600 hover:bg-emerald-700"
-                        >
-                          {connectionStatus === 'testing' ? 'Test en cours...' : 'Tester la connexion'}
-                        </Button>
-                        {connectionStatus === 'success' && (
-                          <div className="flex items-center gap-2 text-emerald-600">
-                            <CheckCircle2 className="w-5 h-5" />
-                            <span className="text-sm">Connexion réussie</span>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          )}
 
           {currentPage === 'settings' && (
             <div className="space-y-6">
@@ -510,19 +639,19 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="p-4 bg-slate-50 rounded-xl">
                       <p className="text-xs text-slate-600">Version</p>
-                      <p className="text-xl text-slate-900 mt-1">2.1.0</p>
+                      <p className="text-xl text-slate-900 mt-1">1.0.0</p>
                     </div>
                     <div className="p-4 bg-slate-50 rounded-xl">
-                      <p className="text-xs text-slate-600">Utilisateurs</p>
+                      <p className="text-xs text-slate-600">Utilisateurs actifs</p>
                       <p className="text-xl text-slate-900 mt-1">{systemUsers.filter(u => u.status === 'active').length}</p>
                     </div>
                     <div className="p-4 bg-slate-50 rounded-xl">
                       <p className="text-xs text-slate-600">Base de données</p>
-                      <p className="text-lg text-slate-900 mt-1">PostgreSQL 15</p>
+                      <p className="text-lg text-slate-900 mt-1">SQLite 3</p>
                     </div>
                     <div className="p-4 bg-slate-50 rounded-xl">
-                      <p className="text-xs text-slate-600">Dernière MAJ</p>
-                      <p className="text-lg text-slate-900 mt-1">10/10/2025</p>
+                      <p className="text-xs text-slate-600">Framework</p>
+                      <p className="text-lg text-slate-900 mt-1">Symfony 6.4</p>
                     </div>
                   </div>
                 </CardContent>
@@ -547,10 +676,10 @@ export default function AdminPage({ user, onLogout }: AdminPageProps) {
                       </div>
                     </div>
                     <div className="flex items-center justify-between p-3 bg-white rounded-xl">
-                      <span className="text-sm text-slate-700">Oracle ERP</span>
+                      <span className="text-sm text-slate-700">API Backend</span>
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-emerald-600 rounded-full"></div>
-                        <span className="text-sm text-emerald-700">Synchronisé</span>
+                        <span className="text-sm text-emerald-700">Disponible</span>
                       </div>
                     </div>
                   </div>
