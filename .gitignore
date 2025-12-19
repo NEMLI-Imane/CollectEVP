@@ -1,0 +1,61 @@
+# ============================================
+# Dépendances (seront réinstallées avec composer/npm)
+# ============================================
+node_modules/
+backend/vendor/
+
+# ============================================
+# Build et distribution
+# ============================================
+build/
+dist/
+
+# ============================================
+# Fichiers d'environnement sensibles (NE JAMAIS COMMITER)
+# ============================================
+.env.local
+.env.*.local
+backend/.env.local
+backend/.env.*.local
+
+# ============================================
+# Clés JWT (sécurité - générées localement)
+# ============================================
+backend/config/jwt/private.pem
+backend/config/jwt/public.pem
+
+# ============================================
+# Base de données (sera recréée avec migrations)
+# ============================================
+backend/var/data.db
+backend/var/data.db-journal
+
+# ============================================
+# Cache et logs (peuvent être régénérés)
+# ============================================
+backend/var/cache/*
+!backend/var/cache/.gitkeep
+backend/var/log/*
+!backend/var/log/.gitkeep
+*.log
+
+# ============================================
+# Fichiers système et temporaires
+# ============================================
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# ============================================
+# IDE (optionnel)
+# ============================================
+.vscode/
+.idea/
+.sublime-*
