@@ -29,6 +29,13 @@ backend/config/jwt/public.pem
 # ============================================
 backend/var/data.db
 backend/var/data.db-journal
+backend/var/data.db-shm
+backend/var/data.db-wal
+
+# ============================================
+# Docker (non utilisé - projet utilise SQLite)
+# ============================================
+docker/
 
 # ============================================
 # Cache et logs (peuvent être régénérés)
