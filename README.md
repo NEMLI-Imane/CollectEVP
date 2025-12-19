@@ -31,9 +31,9 @@
 - **Composer** 2.x
 - **Node.js** 18+ et npm
 
-## 🚀 Installation
+## 🚀 Installation et Déploiement
 
-> **⚠️ IMPORTANT** : Après avoir cloné le projet, vous devez installer les dépendances et configurer quelques fichiers. Suivez les étapes ci-dessous dans l'ordre.
+> **⚠️ IMPORTANT** : Le projet est complet sur Git, mais `node_modules/` et `backend/vendor/` ne sont pas inclus (seront réinstallés). Suivez les étapes ci-dessous dans l'ordre.
 
 ### 1. Cloner le projet
 
@@ -47,14 +47,14 @@ cd "CollectEVP Front"
 ```bash
 cd backend
 
-# Installer les dépendances PHP
+# Installer les dépendances PHP (backend/vendor/ n'est pas dans le dépôt)
 composer install
 ```
 
 **⏱️ Temps : 2-3 minutes**
 
 ```bash
-# Créer le fichier .env.local
+# Créer le fichier .env.local (fichier de configuration local)
 cp .env .env.local
 ```
 
@@ -67,10 +67,10 @@ DATABASE_URL="sqlite:///%kernel.project_dir%/var/data.db"
 ```
 
 ```bash
-# Générer les clés JWT
+# Générer les clés JWT (nécessaires pour l'authentification)
 php bin/console lexik:jwt:generate-keypair
 
-# Créer la base de données et charger les données de test
+# Créer la base de données SQLite et charger les données de test
 php bin/console doctrine:database:create --if-not-exists
 php bin/console doctrine:migrations:migrate --no-interaction
 php bin/console doctrine:fixtures:load --no-interaction
@@ -78,19 +78,23 @@ php bin/console doctrine:fixtures:load --no-interaction
 
 **⏱️ Temps : 30 secondes**
 
+> **✅ Note** : La commande `doctrine:fixtures:load` crée automatiquement les 5 utilisateurs de test et 24 employés de test (voir section "Comptes de test").
+
 ### 3. Frontend - Installation
 
 ```bash
-# Retourner à la racine
+# Retourner à la racine du projet
 cd ..
 
-# Installer les dépendances Node.js
+# Installer les dépendances Node.js (node_modules/ n'est pas dans le dépôt)
 npm install
 ```
 
 **⏱️ Temps : 3-5 minutes**
 
-### 4. Démarrage
+### 4. Démarrage de l'application
+
+Ouvrez **deux terminaux** :
 
 **Terminal 1 - Backend** :
 ```bash
@@ -104,6 +108,8 @@ npm run dev
 ```
 
 ### 5. Accéder à l'application
+
+Une fois les deux serveurs démarrés, accédez à :
 
 - **Frontend** : http://localhost:5173
 - **API Backend** : http://127.0.0.1:8080/api
